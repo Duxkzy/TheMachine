@@ -13,7 +13,7 @@ Follow these steps:
 3. Press **F5** on your keyboard.
 4. From the top dropdown menu, select **Python File** (under "Python Debugger").
 
-The `setup.py` script will automatically generate the `config/api_keys.json` file along with any missing directories. Once you insert your Gemini API key into the generated JSON file, you can launch `main.py` to start the assistant.
+The `setup.py` script will automatically generate the `config/api_keys.json` file along with any missing directories. Once you insert your Gemini API key into the generated JSON file or on the visual first boot, you can launch `main.py` to start the assistant.
 
 ## Credits & Acknowledgments
 

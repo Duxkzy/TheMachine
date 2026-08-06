@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import json
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -10,11 +11,22 @@ subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"
 print("Installing Playwright browsers...")
 subprocess.run([sys.executable, "-m", "playwright", "install"], check=True)
 
-# ── Scaffold folders so the app has somewhere to write its API key, and drop
-#    in a default persona if one isn't already sitting in core/prompt.txt ────
+# Scaffold necessary folders
 (BASE_DIR / "config").mkdir(exist_ok=True)
 (BASE_DIR / "core").mkdir(exist_ok=True)
+(BASE_DIR / "plugins").mkdir(exist_ok=True)
+(BASE_DIR / "memory").mkdir(exist_ok=True)
 
+# Securely check and scaffold api_keys.json template if it doesn't exist
+api_keys_path = BASE_DIR / "config" / "api_keys.json"
+if not api_keys_path.exists():
+    default_keys = {
+        "gemini_api_key": ""
+    }
+    api_keys_path.write_text(json.dumps(default_keys, indent=4), encoding="utf-8")
+    print(f"Created secure template at {api_keys_path}")
+
+# Default system persona prompt
 prompt_path = BASE_DIR / "core" / "prompt.txt"
 if not prompt_path.exists():
     prompt_path.write_text(
@@ -37,7 +49,5 @@ if not prompt_path.exists():
         encoding="utf-8",
     )
     print(f"Created default persona at {prompt_path}")
-    print("(edit that file any time to change how it talks)")
 
-print("\n✅ Setup complete! Add your Gemini API key on first launch, then")
-print("   run 'python main.py' to start THE MACHINE.")
+print("\nSetup complete! Configure your API key in config/api_keys.json or via UI, then run 'python main.py' to start THE MACHINE.")

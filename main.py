@@ -18,6 +18,7 @@ if _platform.system() == "Windows":
 import asyncio
 import array
 import re
+import random
 import threading
 import time
 import json
@@ -27,9 +28,18 @@ from datetime import datetime
 from pathlib import Path
 
 import sounddevice as sd
+
+
+import sys
+if sys.platform == "linux":
+    for i, dev in enumerate(sd.query_devices()):
+        if "pulse" in dev["name"].lower() or "pipewire" in dev["name"].lower():
+            sd.default.device = i
+            break
+# ───────────────────────────────────────────
 from google import genai
 from google.genai import types
-from ui import JarvisUI
+from ui import MachineUI
 from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
 )
@@ -39,6 +49,8 @@ try:
     _VOSK_OK = True
 except ImportError:
     _VOSK_OK = False
+
+from machine import Plugin as _MachinePlugin   # the class-based plugin SDK
 
 from actions.file_processor import file_processor
 from actions.flight_finder     import flight_finder
@@ -70,6 +82,24 @@ def get_base_dir():
 BASE_DIR        = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 PROMPT_PATH     = BASE_DIR / "core" / "prompt.txt"
+
+# ── Logging — writes to a file too, not just the terminal. Handy for bug
+# reports: just grab logs/machine.log instead of copy-pasting the console. ──
+import logging
+from logging.handlers import RotatingFileHandler
+
+LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+logger = logging.getLogger("machine")
+logger.setLevel(logging.INFO)
+_log_handler = RotatingFileHandler(
+    LOG_DIR / "machine.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+)
+_log_handler.setFormatter(logging.Formatter(
+    "%(asctime)s  %(levelname)-7s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+))
+logger.addHandler(_log_handler)
 LIVE_MODEL          = "models/gemini-2.5-flash-native-audio-preview-12-2025"
 CHANNELS            = 1
 SEND_SAMPLE_RATE    = 16000
@@ -82,12 +112,20 @@ WAKE_WORDS         = ["the machine", "machine"]   # lowercase substrings to matc
 WAKE_SLEEP_TIMEOUT = 45   # seconds of silence before it goes back to sleep
 
 # ── Voice barge-in: interrupt it by talking over it ───────────────────────────
-# Crude energy-threshold heuristic, not real echo cancellation — if you're on
-# speakers (not headphones) it may occasionally trip on its own voice bleeding
-# into the mic. Raise the threshold if that happens, lower it if it never
-# triggers. Set BARGE_IN_ENABLED = False to go back to button/Escape-only.
-BARGE_IN_ENABLED   = True
-BARGE_IN_THRESHOLD = 900
+# OFF by default. This needs real acoustic separation (headphones, or a
+# directional/noise-gated mic) to work well — without that, the Machine
+# hears its OWN voice through your speakers and interrupts itself in a
+# feedback loop (stuttering audio, rapid reconnects). Turn it on only if
+# you're on headphones. Even then, it requires a few chunks of SUSTAINED
+# loud audio (not one blip) before it fires, has a cooldown between
+# triggers, and auto-disables itself for the session if it fires too many
+# times too fast (a sign it's just hearing itself, not you).
+BARGE_IN_ENABLED        = False
+BARGE_IN_THRESHOLD      = 1400
+BARGE_IN_SUSTAIN_CHUNKS = 3     # consecutive loud chunks needed (~190ms) before it counts
+BARGE_IN_COOLDOWN       = 1.5   # seconds between allowed triggers
+BARGE_IN_MAX_PER_WINDOW = 3     # auto-disable if it fires more than this...
+BARGE_IN_WINDOW         = 8.0   # ...within this many seconds
 
 def _pcm16_rms(data: bytes) -> float:
     if not data:
@@ -546,11 +584,95 @@ TOOL_DECLARATIONS = [
 ]
 
 # --- Plugin system ---
+# Drop any .py file in plugins/ and it gets picked up automatically. Two
+# styles both work, pick whichever you like:
+#   1. a get_tools() function (see plugins/README.md)
+#   2. a class that subclasses machine.Plugin (see machine/__init__.py)
+# No need to touch this file to add a plugin either way.
+
+PLUGINS_DIR = BASE_DIR / "plugins"
 
 
-class JarvisLive:
+def _load_plugins() -> tuple[list[dict], dict]:
+    """Scans plugins/*.py and loads whatever it finds — get_tools()
+    functions and/or Plugin subclasses. One broken plugin file shouldn't
+    kill the others, so each file (and each entry) gets its own try/except."""
+    import importlib.util
+    import inspect
 
-    def __init__(self, ui: JarvisUI):
+    declarations: list[dict] = []
+    handlers: dict = {}
+    known_names = {d["name"] for d in TOOL_DECLARATIONS}   # built-ins, for collision checks
+
+    if not PLUGINS_DIR.is_dir():
+        return declarations, handlers
+
+    for path in sorted(PLUGINS_DIR.glob("*.py")):
+        if path.stem.startswith("_"):
+            continue   # skip __init__.py etc.
+
+        try:
+            spec = importlib.util.spec_from_file_location(f"plugins.{path.stem}", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        except Exception as e:
+            print(f"[Plugins] ❌ Couldn't load {path.name}: {e}")
+            continue
+
+        entries: list[dict] = []
+
+        # style 1 — a get_tools() function
+        get_tools = getattr(mod, "get_tools", None)
+        if callable(get_tools):
+            try:
+                entries.extend(get_tools())
+            except Exception as e:
+                print(f"[Plugins] ❌ {path.name}: get_tools() crashed — {e}")
+
+        # style 2 — classes that subclass machine.Plugin
+        for _, obj in inspect.getmembers(mod, inspect.isclass):
+            if obj is _MachinePlugin or not issubclass(obj, _MachinePlugin):
+                continue
+            if obj.__module__ != mod.__name__:
+                continue   # skip Plugin itself if it got imported into the module's namespace
+            try:
+                entries.append(obj._as_tool_entry())
+            except Exception as e:
+                print(f"[Plugins] ❌ {path.name}: class {obj.__name__} failed — {e}")
+
+        if not entries:
+            print(f"[Plugins] ⚠️  {path.name} has no get_tools() and no Plugin subclass — skipped")
+            continue
+
+        for entry in entries:
+            decl = entry.get("declaration")
+            fn   = entry.get("handler")
+            if not decl or not callable(fn):
+                print(f"[Plugins] ⚠️  {path.name}: bad entry (missing declaration/handler) — skipped")
+                continue
+
+            name = decl.get("name")
+            if not name:
+                continue
+            if name in known_names:
+                print(f"[Plugins] ⚠️  '{name}' from {path.name} clashes with an existing tool — skipped")
+                continue
+
+            declarations.append(decl)
+            handlers[name] = fn
+            known_names.add(name)
+            print(f"[Plugins] 🧩 Loaded '{name}' from {path.name}")
+
+    return declarations, handlers
+
+
+PLUGIN_DECLARATIONS, PLUGIN_HANDLERS = _load_plugins()
+TOOL_DECLARATIONS = TOOL_DECLARATIONS + PLUGIN_DECLARATIONS
+
+
+class MachineLive:
+
+    def __init__(self, ui: MachineUI):
         self.ui             = ui
         self.session              = None
         self.audio_in_queue       = None
@@ -574,12 +696,20 @@ class JarvisLive:
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
         self._proactive        = ProactiveEngine()
         self._last_user_speech = time.monotonic()  # updated on every user utterance
+        self._commands_run = 0   # for the CMDS counter in the sidebar
 
         # Wake word — starts "asleep" (gated) if Vosk + model are available;
         # falls back to always-on (old behaviour) if either is missing.
         self._awake           = True
         self._wake_recognizer = None
         self._init_wake_recognizer()
+
+        # Barge-in tracking — per-instance so the circuit-breaker can turn
+        # it off for this session without touching the module constant.
+        self._barge_in_enabled     = BARGE_IN_ENABLED
+        self._barge_in_loud_streak = 0
+        self._barge_in_last_fire   = 0.0
+        self._barge_in_fire_times: list[float] = []
 
     def _make_remote_key(self):
         """Called from Qt main thread when user presses Remote Control."""
@@ -647,12 +777,34 @@ class JarvisLive:
             self.ui.set_state("LISTENING")
 
     def _trigger_barge_in(self) -> None:
-        """Runs on the event loop thread when the mic hears something loud
-        enough, while it's speaking, to plausibly be the user talking over it."""
+        """Runs on the event loop thread when the mic heard sustained loud
+        audio while it's speaking. Has a cooldown so one trigger can't
+        cascade, and shuts itself off for the session if it's clearly just
+        hearing its own voice (fires too many times too fast)."""
+        now = time.monotonic()
+        if now - self._barge_in_last_fire < BARGE_IN_COOLDOWN:
+            return   # too soon since the last one — ignore, don't cascade
+
         with self._speaking_lock:
             spk = self._is_speaking
-        if spk:
-            self.interrupt()
+        if not spk:
+            return
+
+        self._barge_in_last_fire = now
+        self._barge_in_fire_times.append(now)
+        self._barge_in_fire_times = [t for t in self._barge_in_fire_times if now - t < BARGE_IN_WINDOW]
+
+        if len(self._barge_in_fire_times) > BARGE_IN_MAX_PER_WINDOW:
+            self._barge_in_enabled = False
+            logger.warning("Barge-in disabled itself mid-session — likely speaker echo feedback.")
+            self.ui.write_log(
+                "SYS: Voice barge-in turned itself off — it looked like it was hearing "
+                "its own voice through the speakers. Use headphones if you want to try "
+                "it again (BARGE_IN_ENABLED in main.py)."
+            )
+            return
+
+        self.interrupt()
 
     def _on_text_command(self, text: str):
         if not self._loop or not self.session:
@@ -749,9 +901,11 @@ class JarvisLive:
         args = dict(fc.args or {})
 
         print(f"[MACHINE] 🔧 {name}  {args}")
-        self.ui.set_state("THINKING")
+        self._commands_run += 1
+        self.ui.set_stats(self._commands_run, len(PLUGIN_HANDLERS))
 
         if name == "save_memory":
+            self.ui.set_state("LEARNING")
             category = args.get("category", "notes")
             key      = args.get("key", "")
             value    = args.get("value", "")
@@ -764,6 +918,9 @@ class JarvisLive:
                 id=fc.id, name=name,
                 response={"result": "ok", "silent": True}
             )
+
+        self.ui.set_state("THINKING")
+        self.ui.set_activity(f"RUNNING: {name}")
 
         loop   = asyncio.get_event_loop()
         result = "Done."
@@ -782,8 +939,25 @@ class JarvisLive:
                 result = r or "Done."
 
             elif name == "file_controller":
-                r = await loop.run_in_executor(None, lambda: file_controller(parameters=args, player=self.ui))
-                result = r or "Done."
+                if args.get("action") == "delete":
+                    target = args.get("path") or args.get("name") or "(unspecified)"
+                    confirmed = await loop.run_in_executor(
+                        None,
+                        lambda: self.ui.confirm_action(
+                            "Confirm delete",
+                            f'Delete "{target}"? This can\'t be undone from here.',
+                        ),
+                    )
+                    if not confirmed:
+                        result = "Delete cancelled — not confirmed."
+                        logger.info(f"Delete blocked (user declined): {target}")
+                    else:
+                        logger.info(f"Delete confirmed by user: {target}")
+                        r = await loop.run_in_executor(None, lambda: file_controller(parameters=args, player=self.ui))
+                        result = r or "Done."
+                else:
+                    r = await loop.run_in_executor(None, lambda: file_controller(parameters=args, player=self.ui))
+                    result = r or "Done."
 
             elif name == "send_message":
                 r = await loop.run_in_executor(None, lambda: send_message(parameters=args, response=None, player=self.ui, session_memory=None))
@@ -892,16 +1066,24 @@ class JarvisLive:
                     os._exit(0)
                 threading.Thread(target=_shutdown, daemon=True).start()
 
+            elif name in PLUGIN_HANDLERS:
+                # plugin tool — same executor pattern as the built-in ones above
+                handler = PLUGIN_HANDLERS[name]
+                r = await loop.run_in_executor(None, lambda: handler(args, self.ui))
+                result = r or "Done."
+
             else:
                 result = f"Unknown tool: {name}"
 
         except Exception as e:
             result = f"Tool '{name}' failed: {e}"
+            logger.exception(f"Tool '{name}' failed with args {args}")
             traceback.print_exc()
             self.speak_error(name, e)
 
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
+        self.ui.set_activity("")
 
         print(f"[MACHINE] 📤 {name} → {str(result)[:80]}")
         return types.FunctionResponse(
@@ -920,18 +1102,22 @@ class JarvisLive:
 
         def callback(indata, frames, time_info, status):
             with self._speaking_lock:
-                jarvis_speaking = self._is_speaking
+                machine_speaking = self._is_speaking
             if self.ui.muted or self._phone_active:
                 return
 
             data = indata.tobytes()
 
-            if jarvis_speaking:
+            if machine_speaking:
                 # Never forward audio to Gemini while it's talking (that's
                 # its own voice bleeding back in) — but optionally watch for
-                # a loud-enough interruption and cut it off locally.
-                if BARGE_IN_ENABLED and _pcm16_rms(data) > BARGE_IN_THRESHOLD:
-                    loop.call_soon_threadsafe(self._trigger_barge_in)
+                # a SUSTAINED loud sound (not just one blip) and cut it off.
+                if self._barge_in_enabled:
+                    loud = _pcm16_rms(data) > BARGE_IN_THRESHOLD
+                    self._barge_in_loud_streak = (self._barge_in_loud_streak + 1) if loud else 0
+                    if self._barge_in_loud_streak >= BARGE_IN_SUSTAIN_CHUNKS:
+                        loop.call_soon_threadsafe(self._trigger_barge_in)
+                        self._barge_in_loud_streak = 0
                 return
 
             if not self._awake:
@@ -1022,7 +1208,7 @@ class JarvisLive:
                                 self.ui.write_log(f"Machine: {full_out}")
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
-                                        "type": "log", "speaker": "jarvis",
+                                        "type": "log", "speaker": "machine",
                                         "text": full_out,
                                         "ts": datetime.now().isoformat(),
                                     }))
@@ -1076,11 +1262,18 @@ class JarvisLive:
     async def _play_audio(self):
         print("[MACHINE] 🔊 Play started")
 
+        safe_device = None
+        for i, dev in enumerate(sd.query_devices()):
+            if "pulse" in dev["name"].lower() or "pipewire" in dev["name"].lower():
+                safe_device = i
+                break
+
         stream = sd.RawOutputStream(
             samplerate=RECEIVE_SAMPLE_RATE,
             channels=CHANNELS,
             dtype="int16",
-            blocksize=CHUNK_SIZE,
+            latency="high",
+            device=safe_device  
         )
         stream.start()
 
@@ -1142,8 +1335,15 @@ class JarvisLive:
         # ── Phase 1: instant greeting — one simple sentence ──────────────────
         lang_clause = f" Respond in {lang}." if lang else ""
         name_clause = f" Address the user as {name}." if name else ""
+        greeting_framings = [
+            "Greet the user plainly",
+            "Come online and give a brief status greeting",
+            "Announce you're up and ready",
+            "Give a short, matter-of-fact greeting",
+        ]
+        framing = random.choice(greeting_framings)
         p1 = (
-            f"Greet the user, mention it is {time_str}, and say you are fetching today's news headlines now. "
+            f"{framing}, mention it is {time_str}, and say you are fetching today's news headlines now. "
             f"One short sentence only. Do not call any tools.{lang_clause}{name_clause}"
         )
 
@@ -1195,15 +1395,19 @@ class JarvisLive:
         """Background task: voice alerts when metrics exceed thresholds."""
         while True:
             await asyncio.sleep(10)
-            alert = await asyncio.to_thread(self._sys_monitor.check)
-            if alert and self.session:
-                try:
+            
+            try:
+                if not getattr(self, "_sys_monitor", None):
+                    continue
+                    
+                alert = await asyncio.to_thread(self._sys_monitor.check)
+                if alert and self.session:
                     await self.session.send_client_content(
                         turns={"parts": [{"text": alert}]},
                         turn_complete=True,
                     )
-                except Exception as e:
-                    print(f"[Monitor] ⚠️ Could not send alert: {e}")
+            except Exception as e:
+                print(f"[Monitor] ⚠️ Silenced error: {e}")
 
     # ── Wake gate timeout ──────────────────────────────────────────────────────
 
@@ -1340,6 +1544,7 @@ class JarvisLive:
         while True:
             try:
                 print("[MACHINE] Connecting...")
+                logger.info("Connecting to Gemini Live session...")
                 self.ui.set_state("THINKING")
                 config = self._build_config()
 
@@ -1367,6 +1572,7 @@ class JarvisLive:
                     self._interrupted          = False
 
                     print("[MACHINE] Connected.")
+                    logger.info("Connected to Gemini Live session.")
                     self.ui.set_state("LISTENING")
                     self.ui.write_log("SYS: System online.")
 
@@ -1400,6 +1606,7 @@ class JarvisLive:
                 # start shutdown — resulting in "executor after shutdown" errors).
                 err_str = str(e)
                 print(f"[MACHINE] Error ({type(e).__name__}): {e}")
+                logger.exception(f"Main loop error ({type(e).__name__})")
                 traceback.print_exc()
 
                 # Invalid API key — stop hammering the API, prompt re-configuration
@@ -1441,13 +1648,14 @@ class JarvisLive:
             await asyncio.sleep(delay)
 
 def main():
-    ui = JarvisUI("face.png")
+    logger.info("=" * 20 + " Machine starting up " + "=" * 20)
+    ui = MachineUI("face.png")
 
     def runner():
         ui.wait_for_api_key()
-        jarvis = JarvisLive(ui)
+        machine = MachineLive(ui)
         try:
-            asyncio.run(jarvis.run())
+            asyncio.run(machine.run())
         except KeyboardInterrupt:
             print("\n🔴 Shutting down...")
 

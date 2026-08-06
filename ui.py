@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter,
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar,
+    QListWidget, QMessageBox,
 )
 
 def _base_dir() -> Path:
@@ -72,6 +73,116 @@ class C:
     WHITE     = "#eef4f4"
     DARK      = "#08090a"
     BAR_BG    = "#101314"
+
+
+# ── Themes ────────────────────────────────────────────────────────────────
+# Everything above is the default "The Machine" look. A theme is just a
+# dict of the same attribute names with different hex values — apply_theme()
+# overwrites C's attributes in place. This has to run BEFORE any class below
+# defines a method with something like `color=C.PRI` as a default argument,
+# since Python locks in default values at def-time, not call-time. That's
+# why this block sits right here, immediately after class C.
+_THEMES: dict[str, dict[str, str]] = {
+    "the_machine": {},   # no overrides — this IS the default above
+    "jarvis_blue": {   # the original palette this project started from
+        "BG": "#00060a", "PANEL": "#010d14", "PANEL2": "#010f18",
+        "BORDER": "#0d3347", "BORDER_B": "#1a5c7a", "BORDER_A": "#0f4060",
+        "PRI": "#00d4ff", "PRI_DIM": "#007a99", "PRI_GHO": "#001f2e",
+        "ACC": "#ff6b00", "ACC2": "#ffcc00", "GREEN": "#00ff88", "GREEN_D": "#00aa55",
+        "RED": "#ff3355", "MUTED_C": "#ff3366",
+        "TEXT": "#8ffcff", "TEXT_DIM": "#3a8a9a", "TEXT_MED": "#5ab8cc",
+        "WHITE": "#d8f8ff", "DARK": "#000d14", "BAR_BG": "#011520",
+    },
+    "cyberpunk": {
+        "BG": "#0a0014", "PANEL": "#150524", "PANEL2": "#1a0630",
+        "BORDER": "#3d1a5c", "BORDER_B": "#8a2be2", "BORDER_A": "#5c2a8c",
+        "PRI": "#ff2fd4", "PRI_DIM": "#a01e8a", "PRI_GHO": "#2a0a3a",
+        "ACC": "#00f0ff", "ACC2": "#f9f002", "GREEN": "#39ff14", "GREEN_D": "#1fa60c",
+        "RED": "#ff2050", "MUTED_C": "#ff2050",
+        "TEXT": "#e0b0ff", "TEXT_DIM": "#7a4a9c", "TEXT_MED": "#b070d8",
+        "WHITE": "#fce8ff", "DARK": "#0d0018", "BAR_BG": "#1a0625",
+    },
+    "matrix": {
+        "BG": "#000400", "PANEL": "#020a02", "PANEL2": "#030f03",
+        "BORDER": "#0a3d0a", "BORDER_B": "#1fa61f", "BORDER_A": "#145214",
+        "PRI": "#33ff33", "PRI_DIM": "#1a8c1a", "PRI_GHO": "#031803",
+        "ACC": "#88ff88", "ACC2": "#aaffaa", "GREEN": "#33ff33", "GREEN_D": "#1fa61f",
+        "RED": "#ff3333", "MUTED_C": "#ff3333",
+        "TEXT": "#66ff66", "TEXT_DIM": "#1f7a1f", "TEXT_MED": "#3fb83f",
+        "WHITE": "#e0ffe0", "DARK": "#000a00", "BAR_BG": "#041004",
+    },
+    "synthwave": {
+        "BG": "#1a0b2e", "PANEL": "#241238", "PANEL2": "#2b1642",
+        "BORDER": "#5a2d7a", "BORDER_B": "#ff6ec7", "BORDER_A": "#7a3d9c",
+        "PRI": "#ff6ec7", "PRI_DIM": "#b0489c", "PRI_GHO": "#3a1a4a",
+        "ACC": "#00d9ff", "ACC2": "#ffd23f", "GREEN": "#05ffa1", "GREEN_D": "#03b876",
+        "RED": "#ff3864", "MUTED_C": "#ff3864",
+        "TEXT": "#e8b3ff", "TEXT_DIM": "#8a5a9c", "TEXT_MED": "#c088d8",
+        "WHITE": "#fff0fc", "DARK": "#150826", "BAR_BG": "#20102f",
+    },
+    "amoled": {
+        "BG": "#000000", "PANEL": "#050505", "PANEL2": "#0a0a0a",
+        "BORDER": "#1f1f1f", "BORDER_B": "#4a4a4a", "BORDER_A": "#2a2a2a",
+        "PRI": "#ffffff", "PRI_DIM": "#707070", "PRI_GHO": "#141414",
+        "ACC": "#ffb800", "ACC2": "#ffd54a", "GREEN": "#00e676", "GREEN_D": "#00a854",
+        "RED": "#ff3b3b", "MUTED_C": "#ff3b3b",
+        "TEXT": "#c8c8c8", "TEXT_DIM": "#5a5a5a", "TEXT_MED": "#8a8a8a",
+        "WHITE": "#ffffff", "DARK": "#000000", "BAR_BG": "#0a0a0a",
+    },
+    "hacker_green": {
+        "BG": "#000c00", "PANEL": "#001800", "PANEL2": "#001f00",
+        "BORDER": "#0d4d0d", "BORDER_B": "#27b027", "BORDER_A": "#1a661a",
+        "PRI": "#27f027", "PRI_DIM": "#158815", "PRI_GHO": "#031f03",
+        "ACC": "#f0d000", "ACC2": "#f5e050", "GREEN": "#27f027", "GREEN_D": "#15a815",
+        "RED": "#f04040", "MUTED_C": "#f04040",
+        "TEXT": "#40d840", "TEXT_DIM": "#1a661a", "TEXT_MED": "#2ea82e",
+        "WHITE": "#d0ffd0", "DARK": "#001200", "BAR_BG": "#001a00",
+    },
+    "minimal_white": {   # light theme — "WHITE" here means "highest-contrast
+        "BG": "#f5f5f5", "PANEL": "#ffffff", "PANEL2": "#eeeeee",   # foreground",
+        "BORDER": "#d0d0d0", "BORDER_B": "#909090", "BORDER_A": "#c0c0c0",  # which is black on a light bg, not literally white
+        "PRI": "#202020", "PRI_DIM": "#808080", "PRI_GHO": "#e8e8e8",
+        "ACC": "#c07000", "ACC2": "#a08000", "GREEN": "#1a9850", "GREEN_D": "#0f7038",
+        "RED": "#c0304a", "MUTED_C": "#c0304a",
+        "TEXT": "#303030", "TEXT_DIM": "#a0a0a0", "TEXT_MED": "#606060",
+        "WHITE": "#000000", "DARK": "#e0e0e0", "BAR_BG": "#e8e8e8",
+    },
+}
+
+THEME_NAMES = list(_THEMES.keys())
+
+
+def _load_saved_theme() -> str:
+    try:
+        cfg = json.loads(API_FILE.read_text(encoding="utf-8"))
+        name = cfg.get("theme", "the_machine")
+        return name if name in _THEMES else "the_machine"
+    except Exception:
+        return "the_machine"
+
+
+def apply_theme(name: str) -> None:
+    """Overwrites C's attributes in place. Widgets built AFTER this call
+    pick up the new colors; anything already built keeps its old
+    stylesheet (Qt doesn't auto-refresh embedded style strings), which is
+    why changing themes asks for a restart instead of trying to reskin a
+    live window."""
+    for key, value in _THEMES.get(name, {}).items():
+        setattr(C, key, value)
+
+
+def save_theme_choice(name: str) -> None:
+    try:
+        cfg = {}
+        if API_FILE.exists():
+            cfg = json.loads(API_FILE.read_text(encoding="utf-8"))
+        cfg["theme"] = name
+        API_FILE.write_text(json.dumps(cfg, indent=4), encoding="utf-8")
+    except Exception as e:
+        print(f"[Theme] Couldn't save theme choice: {e}")
+
+
+apply_theme(_load_saved_theme())
 
 
 def qcol(h: str, a: int = 255) -> QColor:
@@ -255,6 +366,7 @@ class HudCanvas(QWidget):
         self.muted    = False
         self.speaking = False
         self.state    = "INITIALISING"
+        self.activity_text = ""   # set from outside to show what it's specifically doing
 
         self._tick       = 0
         self._scale      = 1.0
@@ -301,6 +413,7 @@ class HudCanvas(QWidget):
             "PROCESSING":  ["EXECUTING TASK", "QUERY IN PROGRESS", "FETCHING DATA"],
             "SPEAKING":    ["TRANSMITTING", "RESPONSE OUTBOUND", "SIGNAL ACTIVE"],
             "MUTED":       ["MIC DISABLED", "STANDING BY"],
+            "LEARNING":    ["SAVING TO MEMORY", "UPDATING PROFILE"],
             "STANDBY":     ["AWAITING WAKE WORD", "DORMANT", "LOW POWER"],
         }
 
@@ -483,6 +596,9 @@ class HudCanvas(QWidget):
         elif self.state == "PROCESSING":
             sym = "▷" if self._blink else "▶"
             txt, col = f"{sym}  PROCESSING", qcol(C.ACC2)
+        elif self.state == "LEARNING":
+            sym = "✎" if self._blink else "✐"
+            txt, col = f"{sym}  LEARNING",   qcol(C.ACC2)
         elif self.state == "LISTENING":
             sym = "●" if self._blink else "○"
             txt, col = f"{sym}  LISTENING",  qcol(C.GREEN)
@@ -494,10 +610,15 @@ class HudCanvas(QWidget):
         p.setFont(QFont("Courier New", 13, QFont.Weight.Bold))
         p.drawText(QRectF(0, sy, W, 26), Qt.AlignmentFlag.AlignCenter, txt)
 
-        # flavour ticker — background "processing" chatter, with blinking cursor
-        _eff   = "MUTED" if self.muted else ("SPEAKING" if self.speaking else self.state)
-        _pool  = self._ticker_phrases.get(_eff, ["MONITORING", "STANDBY"])
-        _tick_txt = _pool[(self._tick // 240) % len(_pool)]
+        # flavour ticker — shows the specific thing it's doing if we know it
+        # (e.g. "RUNNING: spotify_control"), otherwise falls back to the
+        # rotating generic phrases so it's never just blank.
+        if self.activity_text:
+            _tick_txt = self.activity_text
+        else:
+            _eff  = "MUTED" if self.muted else ("SPEAKING" if self.speaking else self.state)
+            _pool = self._ticker_phrases.get(_eff, ["MONITORING", "STANDBY"])
+            _tick_txt = _pool[(self._tick // 240) % len(_pool)]
         cursor = "█" if self._blink else " "
         p.setFont(QFont("Courier New", 8))
         p.setPen(QPen(qcol(C.TEXT_DIM), 1))
@@ -940,6 +1061,326 @@ class _CameraPreview(QWidget):
         self._timer.start(6_000)   # auto-dismiss after 6 s
 
 
+class TerminalOverlay(QWidget):
+    """
+    Big terminal-style overlay, toggled with the backtick key (like a game
+    dev console). Typed text goes through the same pipeline as voice, so
+    the AI still picks the tool to call — this is just a different skin
+    for talking to it, not a separate command parser.
+    """
+    submitted = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            TerminalOverlay {{
+                background: rgba(5, 6, 7, 235);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 6px;
+            }}
+        """)
+        self._history: list[str] = []   # past commands, for up/down recall
+        self._hist_idx = 0
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(6)
+
+        hdr = QHBoxLayout()
+        title = QLabel("◈  TERMINAL   [`] toggle   [Esc] close   [↑↓] history")
+        title.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {C.PRI_DIM}; background: transparent;")
+        hdr.addWidget(title)
+        hdr.addStretch()
+        lay.addLayout(hdr)
+
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {C.BORDER};")
+        lay.addWidget(sep)
+
+        # scrollback — shows the same log as the sidebar, just bigger and
+        # in one place with the prompt
+        self._out = QTextEdit()
+        self._out.setReadOnly(True)
+        self._out.setFont(QFont("Courier New", 10))
+        self._out.setStyleSheet(f"""
+            QTextEdit {{
+                background: transparent; color: {C.TEXT};
+                border: none; selection-background-color: {C.PRI_GHO};
+            }}
+        """)
+        lay.addWidget(self._out, stretch=1)
+
+        # input row — looks like a shell prompt
+        row = QHBoxLayout(); row.setSpacing(6)
+        prompt = QLabel(">")
+        prompt.setFont(QFont("Courier New", 12, QFont.Weight.Bold))
+        prompt.setStyleSheet(f"color: {C.GREEN}; background: transparent;")
+        row.addWidget(prompt)
+
+        self._input = QLineEdit()
+        self._input.setFont(QFont("Courier New", 11))
+        self._input.setPlaceholderText("scan network / summarize file / open vscode / search ...")
+        self._input.setStyleSheet(f"""
+            QLineEdit {{
+                background: transparent; color: {C.WHITE};
+                border: none; border-bottom: 1px solid {C.BORDER_B}; padding: 4px 2px;
+            }}
+        """)
+        self._input.returnPressed.connect(self._submit)
+        self._input.installEventFilter(self)   # so we can catch Up/Down/Esc
+        row.addWidget(self._input, stretch=1)
+        lay.addLayout(row)
+
+        self.hide()
+
+    def focus_input(self) -> None:
+        self._input.setFocus()
+
+    def _submit(self) -> None:
+        txt = self._input.text().strip()
+        if not txt:
+            return
+        self._input.clear()
+        self._history.append(txt)
+        self._hist_idx = len(self._history)
+        self.submitted.emit(txt)
+
+    def append_log(self, text: str) -> None:
+        """Same tag logic as the sidebar LogWidget, just no typewriter
+        animation — a terminal should feel instant, not slow-typed."""
+        tl = text.lower()
+        if   tl.startswith("you:"):     tag = "you"
+        elif tl.startswith("machine:"): tag = "ai"
+        elif tl.startswith("file:"):    tag = "file"
+        elif "err" in tl:               tag = "err"
+        else:                           tag = "sys"
+
+        col = {
+            "you": C.WHITE, "ai": C.PRI, "err": C.RED,
+            "file": C.GREEN, "sys": C.ACC2,
+        }.get(tag, C.TEXT)
+
+        cur = self._out.textCursor()
+        fmt = cur.charFormat()
+        fmt.setForeground(QBrush(qcol(col)))
+        cur.movePosition(cur.MoveOperation.End)
+        prefix = "> " if tag == "you" else "  "
+        cur.insertText(prefix + text + "\n", fmt)
+        self._out.setTextCursor(cur)
+        self._out.ensureCursorVisible()
+
+    def eventFilter(self, obj, event):
+        # catch Up/Down (history) and Esc (close) on the input line before
+        # Qt's default QLineEdit behaviour eats them
+        if obj is self._input and event.type() == event.Type.KeyPress:
+            key = event.key()
+            if key == Qt.Key.Key_Up:
+                if self._history and self._hist_idx > 0:
+                    self._hist_idx -= 1
+                    self._input.setText(self._history[self._hist_idx])
+                return True
+            if key == Qt.Key.Key_Down:
+                if self._history and self._hist_idx < len(self._history) - 1:
+                    self._hist_idx += 1
+                    self._input.setText(self._history[self._hist_idx])
+                else:
+                    self._hist_idx = len(self._history)
+                    self._input.clear()
+                return True
+            if key == Qt.Key.Key_Escape:
+                self.hide()
+                return True
+        return super().eventFilter(obj, event)
+
+
+class CommandPalette(QWidget):
+    """
+    Ctrl+K — quick launcher for UI actions (toggle terminal, fullscreen,
+    mute...) that also doubles as a fast way to just ask the AI something.
+    Typing always shows an "Ask: ..." option at the top, so this covers
+    both "global search" and "command palette" in one widget instead of two.
+    """
+    ask_submitted = pyqtSignal(str)
+
+    def __init__(self, actions: list[tuple[str, str, object]], parent=None):
+        # actions = list of (label, key hint, callback)
+        super().__init__(parent)
+        self._actions = actions
+        self._filtered = list(actions)
+
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            CommandPalette {{
+                background: rgba(8, 9, 10, 245);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 8px;
+            }}
+        """)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(4)
+
+        self._input = QLineEdit()
+        self._input.setPlaceholderText("Type a command, or just ask something...")
+        self._input.setFont(QFont("Courier New", 12))
+        self._input.setFixedHeight(38)
+        self._input.setStyleSheet(f"""
+            QLineEdit {{
+                background: {C.PANEL2}; color: {C.WHITE};
+                border: 1px solid {C.BORDER}; border-radius: 5px; padding: 6px 10px;
+            }}
+            QLineEdit:focus {{ border: 1px solid {C.PRI}; }}
+        """)
+        self._input.textChanged.connect(self._refilter)
+        self._input.installEventFilter(self)
+        lay.addWidget(self._input)
+
+        self._list = QListWidget()
+        self._list.setFont(QFont("Courier New", 10))
+        self._list.setStyleSheet(f"""
+            QListWidget {{
+                background: transparent; color: {C.TEXT};
+                border: none; outline: none;
+            }}
+            QListWidget::item {{ padding: 7px 10px; border-radius: 4px; }}
+            QListWidget::item:selected {{ background: {C.PRI_GHO}; color: {C.PRI}; }}
+        """)
+        self._list.itemActivated.connect(lambda _: self._activate_selected())
+        lay.addWidget(self._list)
+
+        self._rebuild_list("")
+        self.hide()
+
+    def focus_input(self) -> None:
+        self._input.setFocus()
+        self._input.selectAll()
+
+    def _refilter(self, text: str) -> None:
+        needle = text.lower().strip()
+        self._filtered = (
+            [a for a in self._actions if needle in a[0].lower()] if needle else list(self._actions)
+        )
+        self._rebuild_list(text)
+
+    def _rebuild_list(self, typed_text: str) -> None:
+        self._list.clear()
+        typed = typed_text.strip()
+        if typed:
+            self._list.addItem(f'↵  Ask: "{typed}"')
+        for label, hint, _ in self._filtered:
+            self._list.addItem(f"{label}   {hint}".rstrip())
+        if self._list.count():
+            self._list.setCurrentRow(0)
+
+    def _activate_selected(self) -> None:
+        row = self._list.currentRow()
+        typed = self._input.text().strip()
+        has_ask_row = bool(typed)
+
+        if has_ask_row and row == 0:
+            self.ask_submitted.emit(typed)
+            self._close()
+            return
+
+        idx = row - (1 if has_ask_row else 0)
+        if 0 <= idx < len(self._filtered):
+            _, _, callback = self._filtered[idx]
+            callback()
+        self._close()
+
+    def _close(self) -> None:
+        self._input.clear()
+        self.hide()
+
+    def eventFilter(self, obj, event):
+        if obj is self._input and event.type() == event.Type.KeyPress:
+            key = event.key()
+            if key == Qt.Key.Key_Down:
+                self._list.setCurrentRow(min(self._list.currentRow() + 1, self._list.count() - 1))
+                return True
+            if key == Qt.Key.Key_Up:
+                self._list.setCurrentRow(max(self._list.currentRow() - 1, 0))
+                return True
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._activate_selected()
+                return True
+            if key == Qt.Key.Key_Escape:
+                self._close()
+                return True
+        return super().eventFilter(obj, event)
+
+
+class ThemePicker(QWidget):
+    """
+    Pick a theme. Saved for next launch — Qt doesn't support live-restyling
+    every embedded stylesheet in the app, so this needs a restart to fully
+    take effect (same tradeoff most apps make for theme switching).
+    """
+    theme_picked = pyqtSignal(str)
+
+    _LABELS = {
+        "the_machine":   "◈ The Machine (default)",
+        "jarvis_blue":   "◈ JARVIS Blue",
+        "cyberpunk":     "◈ Cyberpunk",
+        "matrix":        "◈ Matrix",
+        "synthwave":     "◈ Synthwave",
+        "amoled":        "◈ AMOLED",
+        "hacker_green":  "◈ Hacker Green",
+        "minimal_white": "◈ Minimal White",
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            ThemePicker {{
+                background: rgba(8, 9, 10, 245);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 8px;
+            }}
+        """)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 16, 18, 16)
+        lay.setSpacing(6)
+
+        title = QLabel("◈  CHOOSE A THEME")
+        title.setFont(QFont("Courier New", 11, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        lay.addWidget(title)
+
+        self._hint = QLabel("Takes effect after you restart the app.")
+        self._hint.setFont(QFont("Courier New", 8))
+        self._hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        lay.addWidget(self._hint)
+        lay.addSpacing(4)
+
+        for key in THEME_NAMES:
+            btn = QPushButton(self._LABELS.get(key, key))
+            btn.setFixedHeight(32)
+            btn.setFont(QFont("Courier New", 9))
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {C.PANEL2}; color: {C.TEXT}; text-align: left;
+                    border: 1px solid {C.BORDER}; border-radius: 3px; padding-left: 10px;
+                }}
+                QPushButton:hover {{ border: 1px solid {C.PRI}; color: {C.PRI}; }}
+            """)
+            btn.clicked.connect(lambda _, k=key: self._pick(k))
+            lay.addWidget(btn)
+
+        self.hide()
+
+    def _pick(self, key: str) -> None:
+        save_theme_choice(key)
+        self._hint.setText(f'Saved "{key}" — restart the app to see it.')
+        self.theme_picked.emit(key)
+
+
 class SetupOverlay(QWidget):
     done = pyqtSignal(str, str)
 
@@ -1305,6 +1746,9 @@ class MainWindow(QMainWindow):
     _camera_sig     = pyqtSignal(bytes)   # show camera frame preview (small overlay)
     _cam_stream_sig = pyqtSignal(bool)   # True=start live stream, False=stop
     _cam_frame_sig  = pyqtSignal(bytes)  # live camera frame → HUD area
+    _invoke_sig     = pyqtSignal(object)  # runs a zero-arg callable on the GUI thread
+    _activity_sig   = pyqtSignal(str)     # what the HUD ticker should show right now
+    _stats_sig      = pyqtSignal(int, int)  # (commands_run, plugins_loaded)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -1427,10 +1871,36 @@ class MainWindow(QMainWindow):
         self._camera_sig.connect(self._show_camera_frame)
         self._cam_stream_sig.connect(self._on_cam_stream)
         self._cam_frame_sig.connect(self._on_cam_frame)
+        self._invoke_sig.connect(lambda fn: fn())
+        self._activity_sig.connect(lambda t: setattr(self.hud, "activity_text", t))
+        self._stats_sig.connect(self._update_stats_labels)
         self._cam_stop = threading.Event()
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
         self._cam_preview = _CameraPreview(self.centralWidget())
+
+        # Terminal overlay — toggled with backtick, see _toggle_terminal()
+        self._terminal = TerminalOverlay(self.centralWidget())
+        self._terminal.submitted.connect(self._on_terminal_submit)
+        self._log_sig.connect(self._terminal.append_log)   # mirrors the sidebar log
+
+        # Command palette — Ctrl+K, quick actions + "just ask" in one box
+        palette_actions = [
+            ("Toggle Terminal",         "[`]",   self._toggle_terminal),
+            ("Toggle Fullscreen",       "[F11]", self._toggle_fullscreen),
+            ("Toggle Mute",             "[F4]",  self._toggle_mute),
+            ("Interrupt",               "[Esc]", self._do_interrupt),
+            ("Open Remote Control",     "",      self._open_remote),
+            ("Create Desktop Shortcut", "",      self._create_desktop_shortcut),
+        ]
+        self._palette = CommandPalette(palette_actions, self.centralWidget())
+        self._palette.ask_submitted.connect(self._on_terminal_submit)   # same flow as typing elsewhere
+
+        # Theme picker — pick now, applies after a restart
+        self._theme_picker = ThemePicker(self.centralWidget())
+        self._theme_picker.theme_picked.connect(
+            lambda k: self._log_sig.emit(f'SYS: Theme set to "{k}" — restart to apply.')
+        )
 
         self._overlay: SetupOverlay | None = None
         self._ready = self._check_config()
@@ -1443,6 +1913,10 @@ class MainWindow(QMainWindow):
         sc_full.activated.connect(self._toggle_fullscreen)
         sc_intr = QShortcut(QKeySequence("Escape"), self)
         sc_intr.activated.connect(self._do_interrupt)
+        sc_term = QShortcut(QKeySequence(Qt.Key.Key_QuoteLeft), self)   # backtick `
+        sc_term.activated.connect(self._toggle_terminal)
+        sc_pal = QShortcut(QKeySequence("Ctrl+K"), self)
+        sc_pal.activated.connect(self._toggle_palette)
 
     def _show_camera_frame(self, img_bytes: bytes):
         """Slot — display camera preview overlay (main thread)."""
@@ -1801,6 +2275,25 @@ class MainWindow(QMainWindow):
             cw.height() - ph - 28,
             pw, ph,
         )
+        if self._terminal.isVisible():
+            tw, th = int(cw.width() * 0.86), int(cw.height() * 0.62)
+            self._terminal.setGeometry(
+                (cw.width() - tw) // 2, int(cw.height() * 0.08), tw, th
+            )
+        if self._palette.isVisible():
+            pw, ph = max(int(cw.width() * 0.5), 380), min(360, int(cw.height() * 0.5))
+            self._palette.setGeometry(
+                (cw.width() - pw) // 2, int(cw.height() * 0.18), pw, ph
+            )
+        if self._theme_picker.isVisible():
+            pw, ph = 320, 360
+            self._theme_picker.setGeometry(
+                (cw.width() - pw) // 2, (cw.height() - ph) // 2, pw, ph
+            )
+
+    def _update_stats_labels(self, commands: int, plugins: int) -> None:
+        self._cmds_lbl.setText(f"CMDS  {commands}")
+        self._plugins_lbl.setText(f"PLUGINS  {plugins}")
 
     def _update_metrics(self):
         snap = _metrics.snapshot()
@@ -1952,6 +2445,16 @@ class MainWindow(QMainWindow):
         os_lbl.setStyleSheet(f"color: {C.ACC2}; background: transparent; border: none;")
         ip_lay.addWidget(os_lbl)
 
+        self._cmds_lbl = QLabel("CMDS  0")
+        self._cmds_lbl.setFont(QFont("Courier New", 8))
+        self._cmds_lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent; border: none;")
+        ip_lay.addWidget(self._cmds_lbl)
+
+        self._plugins_lbl = QLabel("PLUGINS  0")
+        self._plugins_lbl.setFont(QFont("Courier New", 8))
+        self._plugins_lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent; border: none;")
+        ip_lay.addWidget(self._plugins_lbl)
+
         lay.addWidget(info_panel)
         lay.addSpacing(4)
 
@@ -2054,6 +2557,38 @@ class MainWindow(QMainWindow):
         """)
         remote_btn.clicked.connect(self._open_remote)
         lay.addWidget(remote_btn)
+
+        term_btn = QPushButton("⌨  TERMINAL  [`]")
+        term_btn.setFixedHeight(30)
+        term_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        term_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        term_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: #00091a; color: {C.GREEN};
+                border: 1px solid {C.GREEN_D}; border-radius: 3px;
+            }}
+            QPushButton:hover {{
+                background: {C.PRI_GHO}; border: 1px solid {C.GREEN};
+            }}
+        """)
+        term_btn.clicked.connect(self._toggle_terminal)
+        lay.addWidget(term_btn)
+
+        theme_btn = QPushButton("🎨  THEME")
+        theme_btn.setFixedHeight(26)
+        theme_btn.setFont(QFont("Courier New", 7))
+        theme_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        theme_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_DIM};
+                border: 1px solid {C.BORDER}; border-radius: 3px;
+            }}
+            QPushButton:hover {{
+                color: {C.ACC2}; border: 1px solid {C.BORDER_B};
+            }}
+        """)
+        theme_btn.clicked.connect(self._toggle_theme_picker)
+        lay.addWidget(theme_btn)
 
         fs_btn = QPushButton("⛶  FULLSCREEN  [F11]")
         fs_btn.setFixedHeight(26)
@@ -2297,6 +2832,87 @@ class MainWindow(QMainWindow):
         if self.on_interrupt:
             self.on_interrupt()
 
+    def _toggle_terminal(self) -> None:
+        if self._terminal.isVisible():
+            self._terminal.hide()
+            return
+        cw = self.centralWidget()
+        tw, th = int(cw.width() * 0.86), int(cw.height() * 0.62)
+        self._terminal.setGeometry(
+            (cw.width() - tw) // 2, int(cw.height() * 0.08), tw, th
+        )
+        self._terminal.show()
+        self._terminal.raise_()
+        self._terminal.focus_input()
+
+    def _toggle_palette(self) -> None:
+        if self._palette.isVisible():
+            self._palette.hide()
+            return
+        cw = self.centralWidget()
+        pw, ph = int(cw.width() * 0.5), min(360, int(cw.height() * 0.5))
+        pw = max(pw, 380)
+        self._palette.setGeometry(
+            (cw.width() - pw) // 2, int(cw.height() * 0.18), pw, ph
+        )
+        self._palette.show()
+        self._palette.raise_()
+        self._palette.focus_input()
+
+    def _toggle_theme_picker(self) -> None:
+        if self._theme_picker.isVisible():
+            self._theme_picker.hide()
+            return
+        cw = self.centralWidget()
+        pw, ph = 320, 360
+        self._theme_picker.setGeometry(
+            (cw.width() - pw) // 2, (cw.height() - ph) // 2, pw, ph
+        )
+        self._theme_picker.show()
+        self._theme_picker.raise_()
+
+    def confirm_action(self, title: str, message: str) -> bool:
+        """
+        Thread-safe: shows a blocking Yes/No dialog and waits for the
+        answer. Meant to be called from a background thread (e.g. via
+        run_in_executor), NOT directly from the asyncio loop — showing a
+        modal dialog and waiting on it would freeze that loop otherwise.
+        Defaults to "No" if nobody answers within 30s.
+        """
+        box_result = {"ok": False}
+        done = threading.Event()
+
+        def _ask():
+            box = QMessageBox(self)
+            box.setWindowTitle(title)
+            box.setText(message)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            box.setDefaultButton(QMessageBox.StandardButton.No)
+            box.setStyleSheet(f"""
+                QMessageBox {{ background: {C.PANEL}; }}
+                QLabel {{ color: {C.TEXT}; font-family: 'Courier New'; font-size: 11px; }}
+                QPushButton {{
+                    background: {C.PANEL2}; color: {C.PRI};
+                    border: 1px solid {C.BORDER_B}; border-radius: 3px;
+                    padding: 5px 16px; font-family: 'Courier New';
+                }}
+                QPushButton:hover {{ border: 1px solid {C.PRI}; }}
+            """)
+            answer = box.exec()
+            box_result["ok"] = (answer == QMessageBox.StandardButton.Yes)
+            done.set()
+
+        self._invoke_sig.emit(_ask)
+        done.wait(timeout=30)
+        return box_result["ok"]
+
+    def _on_terminal_submit(self, txt: str) -> None:
+        # same flow as pressing Enter in the sidebar input box
+        self._log_sig.emit(f"You: {txt}")
+        if self.on_text_command:
+            threading.Thread(target=self.on_text_command, args=(txt,), daemon=True).start()
+
     def _toggle_mute(self):
         self._muted = not self._muted
         self.hud.muted = self._muted
@@ -2382,7 +2998,7 @@ class _RootShim:
         pass
 
 
-class JarvisUI:
+class MachineUI:
     def __init__(self, face_path: str, size=None):
         self._app = QApplication.instance() or QApplication(sys.argv)
         self._app.setStyle("Fusion")
@@ -2430,8 +3046,23 @@ class JarvisUI:
     def notify_phone_connected(self) -> None:
         self._win.notify_phone_connected()
 
+    def confirm_action(self, title: str, message: str) -> bool:
+        """Blocking Yes/No dialog — call this from a background thread
+        (e.g. inside run_in_executor), never directly from the asyncio loop."""
+        return self._win.confirm_action(title, message)
+
     def set_state(self, state: str):
         self._win._state_sig.emit(state)
+
+    def set_activity(self, text: str) -> None:
+        """Thread-safe: shows a specific thing on the HUD ticker (e.g.
+        'RUNNING: spotify_control'). Pass "" to go back to the generic
+        rotating phrases."""
+        self._win._activity_sig.emit(text)
+
+    def set_stats(self, commands: int, plugins: int) -> None:
+        """Thread-safe: updates the CMDS/PLUGINS counters in the sidebar."""
+        self._win._stats_sig.emit(commands, plugins)
 
     def write_log(self, text: str):
         self._win._log_sig.emit(text)

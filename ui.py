@@ -152,6 +152,12 @@ _THEMES: dict[str, dict[str, str]] = {
 THEME_NAMES = list(_THEMES.keys())
 
 
+def assistant_name() -> str:
+    """What to call the assistant in logs/chat, based on the active theme.
+    main.py imports this so the chat prefix matches the skin."""
+    return "Jarvis" if CURRENT_THEME == "jarvis_blue" else "Machine"
+
+
 def _load_saved_theme() -> str:
     try:
         cfg = json.loads(API_FILE.read_text(encoding="utf-8"))
@@ -425,6 +431,37 @@ class HudCanvas(QWidget):
             "STANDBY":     ["AWAITING WAKE WORD", "DORMANT", "LOW POWER"],
         }
 
+        # ── ORBITAL CORE (optional, JARVIS theme only, off by default) ──────
+        # A torus of particles you can spin with the mouse, resize with the
+        # scroll wheel, or steer with your hands via the camera. Enabled
+        # from the UI — see MainWindow._toggle_orbital_core.
+        self.orbital_mode = False
+        self._torus_particles = [
+            {
+                "theta": random.uniform(0, 2 * math.pi),
+                "phi":   random.uniform(0, 2 * math.pi),
+                "phase": random.uniform(0, 2 * math.pi),
+                "speed": random.uniform(0.35, 0.95),
+                "bright": random.random() < 0.18,   # a few sparkle brighter
+            }
+            for _ in range(320)
+        ]
+        self._auto_spin     = 0.0
+        self._tube_frac     = 0.34
+        self._tube_frac_tgt = 0.34
+        self._mouse_nx = 0.0
+        self._mouse_ny = 0.0
+        self._aim_nx   = 0.0     # eased values actually used for drawing
+        self._aim_ny   = 0.0
+        self.setMouseTracking(True)
+
+        # hand steering — reuses the AR tracker, only runs when switched on
+        self._hand_tracker  = None
+        self._hand_nx = 0.0
+        self._hand_ny = 0.0
+        self._hand_pinch = None
+        self._hand_seen_t = 0.0
+
         self._face_px: QPixmap | None = None
         self._load_face(face_path)
 
@@ -448,6 +485,71 @@ class HudCanvas(QWidget):
             self._face_px = px
         except Exception:
             self._face_px = None
+
+    # ── orbital core input: mouse, wheel, hands ──────────────────────────
+
+    def mouseMoveEvent(self, event):
+        if self.orbital_mode:
+            w, h = self.width(), self.height()
+            if w and h:
+                pos = event.position() if hasattr(event, "position") else event
+                self._mouse_nx = max(-1.0, min(1.0, (pos.x() - w / 2) / (w / 2)))
+                self._mouse_ny = max(-1.0, min(1.0, (pos.y() - h / 2) / (h / 2)))
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self._mouse_nx = 0.0
+        self._mouse_ny = 0.0
+        super().leaveEvent(event)
+
+    def wheelEvent(self, event):
+        if not self.orbital_mode:
+            super().wheelEvent(event)
+            return
+        delta = event.angleDelta().y() / 120.0
+        self._tube_frac_tgt = max(0.10, min(0.62, self._tube_frac_tgt + delta * 0.025))
+        event.accept()
+
+    def set_hand_control(self, enabled: bool) -> bool:
+        """Turns camera hand-steering on/off. Returns True if it actually
+        started — the caller shows a message if the deps aren't there."""
+        if not enabled:
+            if self._hand_tracker is not None:
+                self._hand_tracker.stop()
+                self._hand_tracker = None
+            return False
+        if self._hand_tracker is not None:
+            return True
+        try:
+            import ar_overlay
+        except Exception:
+            return False
+        ready, _ = ar_overlay.deps_status()
+        if not ready:
+            return False
+        self._hand_tracker = ar_overlay.HandTracker()
+        self._hand_tracker.start()
+        return True
+
+    def _poll_hands(self) -> None:
+        """Reads the tracker (if running) and turns the first hand into
+        steering values: palm position aims the torus, pinch sets thickness."""
+        tr = self._hand_tracker
+        if tr is None:
+            return
+        _, hands = tr.snapshot()
+        if not hands:
+            return
+        lm = hands[0]
+        palm = lm[9]
+        self._hand_nx = max(-1.0, min(1.0, (palm[0] - 0.5) * 2.2))
+        self._hand_ny = max(-1.0, min(1.0, (palm[1] - 0.5) * 2.2))
+
+        span = math.dist(lm[0][:2], lm[9][:2]) or 0.001
+        pinch = math.dist(lm[4][:2], lm[8][:2]) / span
+        # pinch ~0.2 (closed) .. ~1.6 (open) → tube 0.10 .. 0.62
+        self._hand_pinch = max(0.10, min(0.62, 0.10 + (pinch - 0.2) * 0.37))
+        self._hand_seen_t = time.time()
 
     def _step(self):
         self._tick += 1
@@ -496,6 +598,25 @@ class HudCanvas(QWidget):
             for p in self._particles if p[4] > 0
         ]
 
+        # ── orbital core update ────────────────────────────────────────────
+        if self.orbital_mode:
+            if self._tick % 3 == 0:      # poll hands ~20x/sec, not every frame
+                self._poll_hands()
+
+            hand_live = (time.time() - self._hand_seen_t) < 0.8
+            if hand_live:
+                tgt_nx, tgt_ny = self._hand_nx, self._hand_ny
+                if self._hand_pinch is not None:
+                    self._tube_frac_tgt = self._hand_pinch
+            else:
+                tgt_nx, tgt_ny = self._mouse_nx, self._mouse_ny
+
+            # ease toward the target so it glides instead of snapping
+            self._aim_nx += (tgt_nx - self._aim_nx) * 0.10
+            self._aim_ny += (tgt_ny - self._aim_ny) * 0.10
+            self._tube_frac += (self._tube_frac_tgt - self._tube_frac) * 0.08
+            self._auto_spin += 0.007 if self.speaking else 0.003
+
         self._blink_tick += 1
         if self._blink_tick >= 38:
             self._blink = not self._blink
@@ -537,8 +658,74 @@ class HudCanvas(QWidget):
 
         # ── centrepiece: differs by theme. jarvis_blue gets the classic
         # ring-gauge look (this is literally what the original pre-rebrand
-        # code drew); everything else gets the lattice + scanline. ──────────
-        if CURRENT_THEME == "jarvis_blue":
+        # code drew) — or the optional orbital core if switched on;
+        # everything else gets the lattice + scanline. ──────────────────────
+        if CURRENT_THEME == "jarvis_blue" and self.orbital_mode:
+            azimuth = self._auto_spin + self._aim_nx * 1.1
+            tilt    = 0.52 + self._aim_ny * 0.42
+
+            R_major = fw * 0.30
+            R_minor = R_major * self._tube_frac
+            sin_t, cos_t = math.sin(tilt), math.cos(tilt)
+
+            projected = []
+            for pt in self._torus_particles:
+                theta  = pt["theta"] + azimuth
+                ring_r = R_major + R_minor * math.cos(pt["phi"])
+                x3 = ring_r * math.cos(theta)
+                z3 = ring_r * math.sin(theta)
+                y3 = R_minor * math.sin(pt["phi"])
+                y_r = y3 * cos_t - z3 * sin_t
+                z_r = y3 * sin_t + z3 * cos_t
+                depth   = max(0.0, min(1.0, (z_r + R_major) / (2 * R_major)))
+                twinkle = 0.5 + 0.5 * math.sin(self._tick * pt["speed"] * 0.05 + pt["phase"])
+                projected.append((x3, y_r, depth, twinkle, pt["bright"]))
+
+            projected.sort(key=lambda t: t[2])   # back to front
+
+            # faint guide ellipse along the tube's centre line, for structure
+            guide = []
+            for k in range(72):
+                a = 2 * math.pi * k / 72 + azimuth
+                guide.append(QPointF(
+                    cx + R_major * math.cos(a),
+                    cy - R_major * math.sin(a) * sin_t,
+                ))
+            p.setPen(QPen(qcol(C.PRI, max(10, int(self._halo * 0.30))), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            for k in range(len(guide)):
+                p.drawLine(guide[k], guide[(k + 1) % len(guide)])
+
+            halo_k   = self._halo / 60.0
+            base_col = QColor(C.MUTED_C if self.muted else C.PRI)
+            p.setPen(Qt.PenStyle.NoPen)
+
+            for x3, y_r, depth, twinkle, bright in projected:
+                px_, py_ = cx + x3, cy + y_r
+                size = 1.0 + depth * 2.8 + (1.1 if bright else 0.0)
+                a = max(6, min(255, int(255 * (0.12 + depth * 0.62)
+                                        * (0.55 + 0.45 * twinkle) * halo_k)))
+
+                # soft bloom behind the nearer particles — this is what sells
+                # the "thousands of glowing points" look without a GPU
+                if depth > 0.55:
+                    hc = QColor(base_col)
+                    hc.setAlpha(max(4, int(a * 0.22)))
+                    p.setBrush(QBrush(hc))
+                    p.drawEllipse(QPointF(px_, py_), size * 3.2, size * 3.2)
+
+                col = QColor(C.WHITE) if (bright and depth > 0.7) else QColor(base_col)
+                col.setAlpha(a)
+                p.setBrush(QBrush(col))
+                p.drawEllipse(QPointF(px_, py_), size, size)
+
+            driving = "HAND" if (time.time() - self._hand_seen_t) < 0.8 else "MOUSE"
+            p.setPen(QPen(qcol(C.PRI_DIM), 1))
+            p.setFont(QFont("Courier New", 7))
+            p.drawText(QRectF(0, cy - fw * 0.46, W, 14), Qt.AlignmentFlag.AlignCenter,
+                       f"◈  ORBITAL CORE · ENGAGED · {driving}")
+
+        elif CURRENT_THEME == "jarvis_blue":
             # spinning arc rings
             for idx, (r_frac, w_r, arc_l, gap) in enumerate(
                 [(0.48, 3, 115, 78), (0.40, 2, 78, 55), (0.32, 1, 56, 40)]
@@ -805,7 +992,7 @@ class LogWidget(QTextEdit):
         self._pos    = 0
         tl = self._text.lower()
         if   tl.startswith("you:"):    self._tag = "you"
-        elif tl.startswith("machine:"): self._tag = "ai"
+        elif tl.startswith("machine:") or tl.startswith("jarvis:"): self._tag = "ai"
         elif tl.startswith("file:"):   self._tag = "file"
         elif "err" in tl:              self._tag = "err"
         else:                          self._tag = "sys"
@@ -1211,7 +1398,7 @@ class TerminalOverlay(QWidget):
         animation — a terminal should feel instant, not slow-typed."""
         tl = text.lower()
         if   tl.startswith("you:"):     tag = "you"
-        elif tl.startswith("machine:"): tag = "ai"
+        elif tl.startswith("machine:") or tl.startswith("jarvis:"): tag = "ai"
         elif tl.startswith("file:"):    tag = "file"
         elif "err" in tl:               tag = "err"
         else:                           tag = "sys"
@@ -1955,6 +2142,11 @@ class MainWindow(QMainWindow):
             ("Open Remote Control",     "",      self._open_remote),
             ("Create Desktop Shortcut", "",      self._create_desktop_shortcut),
         ]
+        if CURRENT_THEME == "jarvis_blue":
+            palette_actions += [
+                ("Toggle Orbital Core", "", self._toggle_orbital_core),
+                ("Toggle AR Hand Mode", "", self._toggle_ar_mode),
+            ]
         self._palette = CommandPalette(palette_actions, self.centralWidget())
         self._palette.ask_submitted.connect(self._on_terminal_submit)   # same flow as typing elsewhere
 
@@ -2352,6 +2544,10 @@ class MainWindow(QMainWindow):
             self._theme_picker.setGeometry(
                 (cw.width() - pw) // 2, (cw.height() - ph) // 2, pw, ph
             )
+        ar = getattr(self, "_ar_overlay", None)
+        if ar is not None and ar.isVisible():
+            aw, ah = int(cw.width() * 0.78), int(cw.height() * 0.72)
+            ar.setGeometry((cw.width() - aw) // 2, (cw.height() - ah) // 2, aw, ah)
 
     def _update_stats_labels(self, commands: int, plugins: int) -> None:
         self._cmds_lbl.setText(f"CMDS  {commands}")
@@ -2657,6 +2853,32 @@ class MainWindow(QMainWindow):
         theme_btn.clicked.connect(self._toggle_theme_picker)
         lay.addWidget(theme_btn)
 
+        # AR hand-tracking — JARVIS theme only, it's a toy for that skin
+        if CURRENT_THEME == "jarvis_blue":
+            ar_btn = QPushButton("✋  AR HAND MODE")
+            ar_btn.setFixedHeight(26)
+            ar_btn.setFont(QFont("Courier New", 7))
+            ar_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            ar_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent; color: {C.PRI};
+                    border: 1px solid {C.PRI_DIM}; border-radius: 3px;
+                }}
+                QPushButton:hover {{
+                    color: {C.PRI}; border: 1px solid {C.PRI};
+                }}
+            """)
+            ar_btn.clicked.connect(self._toggle_ar_mode)
+            lay.addWidget(ar_btn)
+
+            self._orbital_btn = QPushButton("◎  ORBITAL CORE: OFF")
+            self._orbital_btn.setFixedHeight(26)
+            self._orbital_btn.setFont(QFont("Courier New", 7))
+            self._orbital_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._orbital_btn.clicked.connect(self._toggle_orbital_core)
+            lay.addWidget(self._orbital_btn)
+            self._sync_orbital_btn()
+
         fs_btn = QPushButton("⛶  FULLSCREEN  [F11]")
         fs_btn.setFixedHeight(26)
         fs_btn.setFont(QFont("Courier New", 7))
@@ -2942,6 +3164,132 @@ class MainWindow(QMainWindow):
         self._theme_picker.show()
         self._theme_picker.raise_()
 
+    # ── AR hand mode (JARVIS theme only) ─────────────────────────────────
+
+    def _toggle_ar_mode(self) -> None:
+        existing = getattr(self, "_ar_overlay", None)
+        if existing is not None and existing.isVisible():
+            existing.stop()
+            return
+
+        # imported lazily so mediapipe is only needed if you actually use this
+        try:
+            import ar_overlay
+        except Exception as e:
+            self._log_sig.emit(f"ERR: AR mode unavailable — {e}")
+            return
+
+        ready, msg = ar_overlay.deps_status()
+        if not ready:
+            self._log_sig.emit(f"SYS: AR mode — {msg}")
+            return
+
+        cw = self.centralWidget()
+        ov = ar_overlay.ARHudOverlay(C, cw)
+        ov.on_gesture = self._on_ar_gesture
+        ov.closed.connect(lambda: self._log_sig.emit("SYS: AR hand mode off."))
+        w, h = int(cw.width() * 0.78), int(cw.height() * 0.72)
+        ov.setGeometry((cw.width() - w) // 2, (cw.height() - h) // 2, w, h)
+        ov.start()
+        self._ar_overlay = ov
+        self._log_sig.emit("SYS: AR hand mode on — camera is live while this is open.")
+
+    def _on_ar_gesture(self, gesture: str) -> None:
+        """Called from the overlay when a pose is held long enough.
+        In-app actions always work; anything that pokes the OS needs the
+        overlay's CONTROL toggle switched on first."""
+        ov = getattr(self, "_ar_overlay", None)
+
+        if gesture == "OPEN PALM":
+            self._toggle_mute()
+            return
+        if gesture == "FIST":
+            self._do_interrupt()
+            self._log_sig.emit("SYS: Gesture — interrupt.")
+            return
+
+        if ov is None or not ov.control_enabled:
+            return   # OS-level gestures stay off unless explicitly enabled
+
+        try:
+            import pyautogui
+        except Exception:
+            self._log_sig.emit("SYS: Tab gestures need pyautogui installed.")
+            return
+
+        if gesture == "PEACE":
+            pyautogui.hotkey("ctrl", "tab")
+            self._log_sig.emit("SYS: Gesture — next tab.")
+        elif gesture == "POINT":
+            pyautogui.hotkey("ctrl", "shift", "tab")
+            self._log_sig.emit("SYS: Gesture — previous tab.")
+
+    # ── Orbital core (JARVIS theme only, opt-in) ─────────────────────────
+
+    def _toggle_orbital_core(self) -> None:
+        if self.hud.orbital_mode:
+            self.hud.orbital_mode = False
+            self.hud.set_hand_control(False)
+            self._log_sig.emit("SYS: Orbital core disengaged.")
+            self._sync_orbital_btn()
+            return
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Orbital core")
+        box.setText(
+            "Engage the orbital core?\n\n"
+            "Replaces the ring gauge with a particle torus you can steer.\n\n"
+            "• Mouse — move over it to spin, scroll to change thickness\n"
+            "• Hands — optional, uses the camera: move your hand to steer,\n"
+            "  pinch open/closed to change thickness"
+        )
+        box.setIcon(QMessageBox.Icon.Question)
+        yes_mouse = box.addButton("Engage (mouse)", QMessageBox.ButtonRole.AcceptRole)
+        yes_hands = box.addButton("Engage + hands", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setStyleSheet(f"""
+            QMessageBox {{ background: {C.PANEL}; }}
+            QLabel {{ color: {C.TEXT}; font-family: 'Courier New'; font-size: 11px; }}
+            QPushButton {{
+                background: {C.PANEL2}; color: {C.PRI};
+                border: 1px solid {C.BORDER_B}; border-radius: 3px;
+                padding: 5px 14px; font-family: 'Courier New';
+            }}
+            QPushButton:hover {{ border: 1px solid {C.PRI}; }}
+        """)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked not in (yes_mouse, yes_hands):
+            return
+
+        self.hud.orbital_mode = True
+        self._log_sig.emit("SYS: Orbital core engaged — move the mouse over it to steer.")
+
+        if clicked is yes_hands:
+            if self.hud.set_hand_control(True):
+                self._log_sig.emit("SYS: Hand steering on — camera is live.")
+            else:
+                self._log_sig.emit(
+                    "SYS: Hand steering unavailable (needs mediapipe + the model "
+                    "file — see ar_overlay.py). Mouse steering still works."
+                )
+        self._sync_orbital_btn()
+
+    def _sync_orbital_btn(self) -> None:
+        btn = getattr(self, "_orbital_btn", None)
+        if btn is None:
+            return
+        on = self.hud.orbital_mode
+        col = C.GREEN if on else C.PRI
+        btn.setText(f"◎  ORBITAL CORE: {'ON' if on else 'OFF'}")
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {col};
+                border: 1px solid {col if on else C.PRI_DIM}; border-radius: 3px;
+            }}
+            QPushButton:hover {{ border: 1px solid {col}; }}
+        """)
+
     def confirm_action(self, title: str, message: str) -> bool:
         """
         Thread-safe: shows a blocking Yes/No dialog and waits for the
@@ -3169,4 +3517,3 @@ class MachineUI:
     def stop_speaking(self):
         if not self.muted:
             self.set_state("LISTENING")
-            

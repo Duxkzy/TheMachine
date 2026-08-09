@@ -4,3 +4,8 @@
 config/api_keys.json
 api_keys.json
 logs/
+
+__pycache__/
+venv/
+core/*.task
+plugins/.spotify_cache

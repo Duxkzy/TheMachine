@@ -40,8 +40,59 @@ def _base_dir() -> Path:
     return Path(__file__).resolve().parent
 
 BASE_DIR   = _base_dir()
+
+# ── ar_overlay loader ───────────────────────────────────────────────────
+# A plain `import ar_overlay` only works if the app was launched from the
+# project folder. Run it from anywhere else (VSCode debugger, a desktop
+# shortcut, a different cwd) and it fails with "no module named". Load it
+# by absolute path instead, so it works regardless of where you started.
+_ar_module = None
+_ar_error  = ""
+
+
+def load_ar_overlay():
+    """Returns the ar_overlay module, or None. Second return value is a
+    human-readable reason when it's None."""
+    global _ar_module, _ar_error
+    if _ar_module is not None:
+        return _ar_module, ""
+    if _ar_error:
+        return None, _ar_error
+
+    path = BASE_DIR / "ar_overlay.py"
+    if not path.exists():
+        _ar_error = f"ar_overlay.py not found next to ui.py (looked in {BASE_DIR})"
+        return None, _ar_error
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ar_overlay", path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["ar_overlay"] = mod      # so its own imports resolve
+        spec.loader.exec_module(mod)
+        _ar_module = mod
+        return mod, ""
+    except Exception as e:
+        _ar_error = f"ar_overlay.py failed to load: {e}"
+        return None, _ar_error
 CONFIG_DIR = BASE_DIR / "config"
 API_FILE   = CONFIG_DIR / "api_keys.json"
+
+def load_matrix_dash():
+    """Same path-based loading as ar_overlay, so it works from any cwd."""
+    path = BASE_DIR / "matrix_dash.py"
+    if not path.exists():
+        return None
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("matrix_dash", path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["matrix_dash"] = mod
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception as e:
+        print(f"[Matrix] dashboard failed to load: {e}")
+        return None
+
 
 _DEFAULT_W, _DEFAULT_H = 980, 700
 _MIN_W,     _MIN_H     = 820, 580
@@ -103,13 +154,13 @@ _THEMES: dict[str, dict[str, str]] = {
         "WHITE": "#fce8ff", "DARK": "#0d0018", "BAR_BG": "#1a0625",
     },
     "matrix": {
-        "BG": "#000400", "PANEL": "#020a02", "PANEL2": "#030f03",
-        "BORDER": "#0a3d0a", "BORDER_B": "#1fa61f", "BORDER_A": "#145214",
-        "PRI": "#33ff33", "PRI_DIM": "#1a8c1a", "PRI_GHO": "#031803",
-        "ACC": "#88ff88", "ACC2": "#aaffaa", "GREEN": "#33ff33", "GREEN_D": "#1fa61f",
-        "RED": "#ff3333", "MUTED_C": "#ff3333",
-        "TEXT": "#66ff66", "TEXT_DIM": "#1f7a1f", "TEXT_MED": "#3fb83f",
-        "WHITE": "#e0ffe0", "DARK": "#000a00", "BAR_BG": "#041004",
+        "BG": "#010703", "PANEL": "#02120a", "PANEL2": "#031a0e",
+        "BORDER": "#0d4022", "BORDER_B": "#1f7a42", "BORDER_A": "#125230",
+        "PRI": "#3bff6e", "PRI_DIM": "#1f9c42", "PRI_GHO": "#04240f",
+        "ACC": "#9dff5a", "ACC2": "#c8ff7a", "GREEN": "#3bff6e", "GREEN_D": "#2ac253",
+        "RED": "#ff5c5c", "MUTED_C": "#ff5c5c",
+        "TEXT": "#6dffa0", "TEXT_DIM": "#2f8a52", "TEXT_MED": "#4ac97a",
+        "WHITE": "#d9ffe6", "DARK": "#010a05", "BAR_BG": "#062a14",
     },
     "synthwave": {
         "BG": "#1a0b2e", "PANEL": "#241238", "PANEL2": "#2b1642",
@@ -520,9 +571,8 @@ class HudCanvas(QWidget):
             return False
         if self._hand_tracker is not None:
             return True
-        try:
-            import ar_overlay
-        except Exception:
+        ar_overlay, _err = load_ar_overlay()
+        if ar_overlay is None:
             return False
         ready, _ = ar_overlay.deps_status()
         if not ready:
@@ -2032,7 +2082,13 @@ class MainWindow(QMainWindow):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
 
-        self._left_panel = self._build_left_panel()
+        # Matrix theme swaps the side panels for the dashboard ones. Loaded
+        # lazily; if the module is missing we silently keep the normal look.
+        self._mx = load_matrix_dash() if CURRENT_THEME == "matrix" else None
+
+        self._left_panel = (
+            self._build_matrix_left() if self._mx else self._build_left_panel()
+        )
         body.addWidget(self._left_panel, stretch=0)
 
         # Center column: HUD + resizable content panel via QSplitter
@@ -2074,10 +2130,17 @@ class MainWindow(QMainWindow):
         )
         _cam_v.addWidget(self._cam_live_lbl, stretch=1)
 
-        # Stack: 0 = animated HUD, 1 = live camera
+        # Stack: 0 = animated HUD, 1 = live camera, 2 = matrix rain (if on)
         self._hud_cam_stack = QStackedWidget()
         self._hud_cam_stack.addWidget(self.hud)
         self._hud_cam_stack.addWidget(_cam_cont)
+
+        self._matrix_rain = None
+        if self._mx:
+            self._matrix_rain = self._mx.MatrixRain(C)
+            self._matrix_rain.submitted.connect(self._on_terminal_submit)
+            self._hud_cam_stack.addWidget(self._matrix_rain)
+            self._hud_cam_stack.setCurrentIndex(2)
 
         self._center_split = QSplitter(Qt.Orientation.Vertical)
         self._center_split.setStyleSheet(f"""
@@ -2096,7 +2159,9 @@ class MainWindow(QMainWindow):
         self._center_split.setCollapsible(0, False)
         body.addWidget(self._center_split, stretch=5)
 
-        self._right_panel = self._build_right_panel()
+        self._right_panel = (
+            self._build_matrix_right() if self._mx else self._build_right_panel()
+        )
         body.addWidget(self._right_panel, stretch=0)
 
         root.addLayout(body, stretch=1)
@@ -2550,10 +2615,17 @@ class MainWindow(QMainWindow):
             ar.setGeometry((cw.width() - aw) // 2, (cw.height() - ah) // 2, aw, ah)
 
     def _update_stats_labels(self, commands: int, plugins: int) -> None:
+        # matrix mode uses its own left panel, so these labels don't exist
+        if not hasattr(self, "_cmds_lbl"):
+            return
         self._cmds_lbl.setText(f"CMDS  {commands}")
         self._plugins_lbl.setText(f"PLUGINS  {plugins}")
 
     def _update_metrics(self):
+        # matrix mode's panels refresh themselves, and none of the bars
+        # below exist there — bail out early rather than AttributeError
+        if not hasattr(self, "_bar_cpu"):
+            return
         snap = _metrics.snapshot()
 
         # CPU
@@ -2738,6 +2810,119 @@ class MainWindow(QMainWindow):
             lay.addWidget(lbl)
 
         return w
+    # ── Matrix-mode panels ────────────────────────────────────────────────
+
+    def _build_matrix_left(self) -> QWidget:
+        """System status + network + processes, all live data. Uses a
+        min/max width instead of a fixed one, and scrolls, so a small
+        window squeezes the panel rather than crushing the centre."""
+        inner = QWidget()
+        inner.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(inner)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(10)
+        lay.addWidget(self._mx.SystemStatusPanel(C, _metrics.snapshot), stretch=0)
+        lay.addWidget(self._mx.NetworkPanel(C, _metrics.snapshot), stretch=0)
+        lay.addWidget(self._mx.ProcessPanel(C), stretch=1)
+
+        return self._mx_scroll(inner, side="left")
+
+    def _mx_scroll(self, inner: QWidget, side: str) -> QWidget:
+        area = QScrollArea()
+        area.setWidget(inner)
+        area.setWidgetResizable(True)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setMinimumWidth(230)
+        area.setMaximumWidth(360)
+        border = "right" if side == "left" else "left"
+        area.setStyleSheet(f"""
+            QScrollArea {{
+                background: {C.BG}; border-{border}: 1px solid {C.BORDER};
+            }}
+            QScrollBar:vertical {{ background: {C.BG}; width: 6px; border: none; }}
+            QScrollBar::handle:vertical {{
+                background: {C.BORDER_B}; border-radius: 3px; min-height: 18px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0; border: none;
+            }}
+        """)
+        return area
+
+    def _build_matrix_right(self) -> QWidget:
+        """Console (the activity log, terminal-styled) + quick actions."""
+        w = QWidget()
+        w.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(10)
+
+        console = QWidget()
+        inner = self._mx._panel_frame(console, C, "COMMAND CONSOLE")
+        self._log = LogWidget()
+        self._log.setStyleSheet(f"""
+            QTextEdit {{
+                background: transparent; color: {C.TEXT};
+                border: none; padding: 0;
+            }}
+            QScrollBar:vertical {{ background: {C.BG}; width: 6px; border: none; }}
+            QScrollBar::handle:vertical {{
+                background: {C.BORDER_B}; border-radius: 3px; min-height: 16px;
+            }}
+        """)
+        inner.addWidget(self._log)
+        lay.addWidget(console, stretch=1)
+
+        actions = self._mx.QuickActionsPanel(C, on_exit=self.close)
+        actions.action_logged.connect(lambda m: self._log_sig.emit(m))
+        lay.addWidget(actions, stretch=0)
+
+        # controls the normal right panel has — matrix mode needs them too
+        ctrl = QWidget()
+        ctrl.setStyleSheet("background: transparent;")
+        grid = QVBoxLayout(ctrl)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(5)
+
+        def _mx_btn(text, slot, color=None):
+            b = QPushButton(text)
+            b.setFixedHeight(26)
+            b.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            col = color or C.PRI
+            b.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent; color: {col};
+                    border: 1px solid {C.BORDER_B}; border-radius: 3px;
+                }}
+                QPushButton:hover {{ border: 1px solid {col}; background: {C.PRI_GHO}; }}
+            """)
+            b.clicked.connect(slot)
+            return b
+
+        self._mute_btn = _mx_btn("MICROPHONE ACTIVE", self._toggle_mute, C.GREEN)
+        self._interrupt_btn = _mx_btn("INTERRUPT  [ESC]", self._do_interrupt, C.MUTED_C)
+        row = QHBoxLayout(); row.setSpacing(5)
+        row.addWidget(_mx_btn("TERMINAL  [`]", self._toggle_terminal))
+        row.addWidget(_mx_btn("THEME", self._toggle_theme_picker, C.ACC2))
+        grid.addWidget(self._mute_btn)
+        grid.addWidget(self._interrupt_btn)
+        grid.addLayout(row)
+        grid.addWidget(_mx_btn("REMOTE CONTROL", self._open_remote))
+        lay.addWidget(ctrl, stretch=0)
+
+        # things the normal right panel owns that the rest of the code
+        # expects to exist — created hidden so nothing breaks
+        self._drop_zone = FileDropZone()
+        self._drop_zone.file_selected.connect(self._on_file_selected)
+        self._drop_zone.hide()
+        self._file_hint = QLabel(); self._file_hint.hide()
+        self._input = QLineEdit(); self._input.hide()
+        for hidden in (self._drop_zone, self._file_hint, self._input):
+            hidden.setParent(w)
+        return self._mx_scroll(w, side="right")
+
     def _build_right_panel(self) -> QWidget:
         w = QWidget()
         w.setFixedWidth(_RIGHT_W)
@@ -3172,11 +3357,10 @@ class MainWindow(QMainWindow):
             existing.stop()
             return
 
-        # imported lazily so mediapipe is only needed if you actually use this
-        try:
-            import ar_overlay
-        except Exception as e:
-            self._log_sig.emit(f"ERR: AR mode unavailable — {e}")
+        # loaded lazily by path, so mediapipe is only needed if you use this
+        ar_overlay, err = load_ar_overlay()
+        if ar_overlay is None:
+            self._log_sig.emit(f"ERR: AR mode unavailable — {err}")
             return
 
         ready, msg = ar_overlay.deps_status()

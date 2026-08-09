@@ -37,7 +37,7 @@ if sys.platform == "linux":
 
 from google import genai
 from google.genai import types
-from ui import MachineUI
+from ui import MachineUI, assistant_name
 from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
 )
@@ -124,6 +124,22 @@ BARGE_IN_SUSTAIN_CHUNKS = 3     # consecutive loud chunks needed (~190ms) before
 BARGE_IN_COOLDOWN       = 1.5   # seconds between allowed triggers
 BARGE_IN_MAX_PER_WINDOW = 3     # auto-disable if it fires more than this...
 BARGE_IN_WINDOW         = 8.0   # ...within this many seconds
+
+# ── Mic noise gate ───────────────────────────────────────────────────────────
+# Without this, everything the mic hears goes to Gemini — including keyboard
+# clatter, a fan, someone else's TV — and the model dutifully "transcribes"
+# that noise into nonsense sentences, then answers them.
+#
+# The gate learns your room's noise floor while you're quiet, then only opens
+# for sound clearly above it. Speech is sustained, so it needs a couple of
+# loud chunks in a row (one keyboard click won't do it), and once open it
+# stays open briefly so word endings don't get chopped.
+MIC_GATE_ENABLED      = True
+MIC_GATE_OPEN_CHUNKS  = 2      # consecutive loud chunks needed to open (~130ms)
+MIC_GATE_HANGOVER     = 0.8    # seconds to keep sending after it goes quiet
+MIC_GATE_FLOOR_MULT   = 3.2    # threshold = noise_floor * this + margin
+MIC_GATE_FLOOR_MARGIN = 120.0
+MIC_GATE_MIN_THRESH   = 220.0  # never gate below this, however quiet the room
 
 def _pcm16_rms(data: bytes) -> float:
     if not data:
@@ -709,6 +725,13 @@ class MachineLive:
         self._barge_in_last_fire   = 0.0
         self._barge_in_fire_times: list[float] = []
 
+        # Mic noise gate state — learns the room's noise floor as it goes
+        self._gate_open        = False
+        self._gate_loud_streak = 0
+        self._gate_last_loud   = 0.0
+        self._noise_floor      = 150.0   # seeded low; adapts within a second
+        self._gate_logged      = False
+
     def _make_remote_key(self):
         """Called from Qt main thread when user presses Remote Control."""
         if self._dashboard is None:
@@ -803,6 +826,48 @@ class MachineLive:
             return
 
         self.interrupt()
+
+    # ── Mic noise gate ────────────────────────────────────────────────────
+
+    def _passes_noise_gate(self, data: bytes) -> bool:
+        """True if this chunk should go to Gemini. Runs on the audio thread,
+        so it stays cheap — one RMS pass and a few comparisons.
+
+        Two things make it work on real desks: the threshold is relative to
+        the measured noise floor (so a loud room and a quiet room both
+        behave), and it needs sustained sound to open (so a keyboard click,
+        which is one sharp spike, doesn't get through)."""
+        rms = _pcm16_rms(data)
+        now = time.monotonic()
+
+        threshold = max(
+            MIC_GATE_MIN_THRESH,
+            self._noise_floor * MIC_GATE_FLOOR_MULT + MIC_GATE_FLOOR_MARGIN,
+        )
+
+        if rms > threshold:
+            self._gate_loud_streak += 1
+            self._gate_last_loud = now
+            if self._gate_loud_streak >= MIC_GATE_OPEN_CHUNKS:
+                if not self._gate_open:
+                    self._gate_open = True
+                    if not self._gate_logged:
+                        # one-off, so you can see what it settled on
+                        self._gate_logged = True
+                        print(f"[Gate] Opened. floor={self._noise_floor:.0f} "
+                              f"thresh={threshold:.0f} rms={rms:.0f}")
+                return True
+            return self._gate_open
+        else:
+            self._gate_loud_streak = 0
+            # only learn the floor while the gate is shut, so your own voice
+            # never drags the threshold up behind you
+            if not self._gate_open:
+                self._noise_floor = self._noise_floor * 0.995 + rms * 0.005
+            if self._gate_open and (now - self._gate_last_loud) < MIC_GATE_HANGOVER:
+                return True   # brief tail so word endings survive
+            self._gate_open = False
+            return False
 
     def _on_text_command(self, text: str):
         if not self._loop or not self.session:
@@ -1123,6 +1188,9 @@ class MachineLive:
                 loop.call_soon_threadsafe(self._feed_wake_word, data)
                 return
 
+            if MIC_GATE_ENABLED and not self._passes_noise_gate(data):
+                return
+
             loop.call_soon_threadsafe(
                 self.out_queue.put_nowait,
                 {"data": data, "mime_type": "audio/pcm"}
@@ -1203,7 +1271,7 @@ class MachineLive:
 
                             full_out = " ".join(out_buf).strip()
                             if full_out:
-                                self.ui.write_log(f"Machine: {full_out}")
+                                self.ui.write_log(f"{assistant_name()}: {full_out}")
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
                                         "type": "log", "speaker": "machine",

@@ -29,14 +29,12 @@ from pathlib import Path
 
 import sounddevice as sd
 
-
-import sys
 if sys.platform == "linux":
     for i, dev in enumerate(sd.query_devices()):
         if "pulse" in dev["name"].lower() or "pipewire" in dev["name"].lower():
             sd.default.device = i
             break
-# ───────────────────────────────────────────
+
 from google import genai
 from google.genai import types
 from ui import MachineUI
@@ -1273,7 +1271,7 @@ class MachineLive:
             channels=CHANNELS,
             dtype="int16",
             latency="high",
-            device=safe_device  
+            device=safe_device
         )
         stream.start()
 
@@ -1395,11 +1393,11 @@ class MachineLive:
         """Background task: voice alerts when metrics exceed thresholds."""
         while True:
             await asyncio.sleep(10)
-            
+
             try:
                 if not getattr(self, "_sys_monitor", None):
                     continue
-                    
+
                 alert = await asyncio.to_thread(self._sys_monitor.check)
                 if alert and self.session:
                     await self.session.send_client_content(

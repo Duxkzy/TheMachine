@@ -1,27 +1,13 @@
-sounddevice
-google-genai
-google-generativeai
-pillow
-requests
-beautifulsoup4
-duckduckgo-search
-playwright
-pyautogui
-pyperclip
-pygetwindow
-opencv-python
-numpy
-mss
-psutil
-send2trash
-youtube-transcript-api
-python-pptx
-fastapi
-uvicorn[standard]
-cryptography
-python-multipart
-comtypes; sys_platform == "win32"
-pycaw; sys_platform == "win32"
-win10toast; sys_platform == "win32"
-pywinauto; sys_platform == "win32"
-qrcode[pil]
+google-genai>=0.3.0
+sounddevice>=0.4.6
+vosk>=0.3.45
+playwright>=1.40.0
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+cryptography>=41.0.0
+psutil>=5.9.0
+Pillow>=10.0.0
+pyautogui>=0.9.54
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+pyperclip>=1.8.2

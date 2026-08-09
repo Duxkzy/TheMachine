@@ -161,12 +161,18 @@ def _load_saved_theme() -> str:
         return "the_machine"
 
 
+CURRENT_THEME = "the_machine"   # updated by apply_theme() below — HudCanvas
+                                  # checks this to pick which visualization to draw
+
+
 def apply_theme(name: str) -> None:
     """Overwrites C's attributes in place. Widgets built AFTER this call
     pick up the new colors; anything already built keeps its old
     stylesheet (Qt doesn't auto-refresh embedded style strings), which is
     why changing themes asks for a restart instead of trying to reskin a
     live window."""
+    global CURRENT_THEME
+    CURRENT_THEME = name if name in _THEMES else "the_machine"
     for key, value in _THEMES.get(name, {}).items():
         setattr(C, key, value)
 
@@ -383,6 +389,8 @@ class HudCanvas(QWidget):
         self._particles: list[list[float]] = []
 
         # ── lattice: a loose network graph representing tracked signals ─────
+        # (used by the default "The Machine" look — jarvis_blue draws its
+        # own classic ring-gauge instead, see paintEvent)
         self._nodes = [
             {
                 "x": random.uniform(0.08, 0.92),
@@ -527,38 +535,88 @@ class HudCanvas(QWidget):
             p.setPen(QPen(col, 1.2)); p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawEllipse(QRectF(cx - pr, cy - pr, pr * 2, pr * 2))
 
-        # ── lattice: the network of tracked signals ──────────────────────────
-        pts = [(n["x"] * W, n["y"] * H) for n in self._nodes]
-        edge_a = max(20, min(120, int(self._halo * 0.9)))
-        p.setPen(QPen(qcol(C.PRI_DIM, edge_a), 1))
-        for i, j in self._edges:
-            p.drawLine(QPointF(*pts[i]), QPointF(*pts[j]))
+        # ── centrepiece: differs by theme. jarvis_blue gets the classic
+        # ring-gauge look (this is literally what the original pre-rebrand
+        # code drew); everything else gets the lattice + scanline. ──────────
+        if CURRENT_THEME == "jarvis_blue":
+            # spinning arc rings
+            for idx, (r_frac, w_r, arc_l, gap) in enumerate(
+                [(0.48, 3, 115, 78), (0.40, 2, 78, 55), (0.32, 1, 56, 40)]
+            ):
+                ring_r = fw * r_frac
+                base   = self._rings[idx]
+                a_val  = max(0, min(255, int(self._halo * (1.0 - idx * 0.18))))
+                col    = qcol(C.MUTED_C if self.muted else C.PRI, a_val)
+                p.setPen(QPen(col, w_r)); p.setBrush(Qt.BrushStyle.NoBrush)
+                angle = base
+                rect  = QRectF(cx - ring_r, cy - ring_r, ring_r * 2, ring_r * 2)
+                while angle < base + 360:
+                    p.drawArc(rect, int(angle * 16), int(arc_l * 16))
+                    angle += arc_l + gap
 
-        for (nx, ny), node in zip(pts, self._nodes):
-            glow = 0.5 + 0.5 * math.sin(self._tick * node["speed"] + node["phase"])
-            a    = max(20, min(255, int((90 + 140 * glow) * (self._halo / 60.0))))
-            r_n  = 2.0 + 1.4 * glow
-            col  = qcol(C.MUTED_C if self.muted else C.PRI, a)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(col))
-            p.drawEllipse(QPointF(nx, ny), r_n, r_n)
+            # scanners — two sweeping arcs
+            sr = fw * 0.50
+            sa = min(255, int(self._halo * 1.5))
+            ex = 75 if self.speaking else 44
+            p.setPen(QPen(qcol(C.MUTED_C if self.muted else C.PRI, sa), 2.5))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            srect = QRectF(cx - sr, cy - sr, sr * 2, sr * 2)
+            p.drawArc(srect, int(self._scan * 16), int(ex * 16))
+            p.setPen(QPen(qcol(C.ACC, sa // 2), 1.5))
+            p.drawArc(srect, int(self._scan2 * 16), int(ex * 16))
 
-        # ── horizontal scanline sweep (dual-pass, like a flatbed scanner) ────
-        scan_y1 = (self._scan  / 360.0) * H
-        scan_y2 = (self._scan2 / 360.0) * H
-        sa = min(200, int(self._halo * 1.4))
-        p.setPen(QPen(qcol(C.MUTED_C if self.muted else C.PRI, sa), 1.4))
-        p.drawLine(QPointF(0, scan_y1), QPointF(W, scan_y1))
-        p.setPen(QPen(qcol(C.ACC, sa // 2), 1))
-        p.drawLine(QPointF(0, scan_y2), QPointF(W, scan_y2))
+            # tick marks around the ring
+            t_out, t_in = fw * 0.497, fw * 0.474
+            p.setPen(QPen(qcol(C.PRI, 140), 1))
+            for deg in range(0, 360, 10):
+                rad = math.radians(deg)
+                inn = t_in if deg % 30 == 0 else t_in + 6
+                p.drawLine(
+                    QPointF(cx + t_out * math.cos(rad), cy - t_out * math.sin(rad)),
+                    QPointF(cx + inn  * math.cos(rad), cy - inn  * math.sin(rad)),
+                )
 
-        # crosshair — target-lock reticle
-        ch_r, gap_h = fw * 0.30, fw * 0.10
-        p.setPen(QPen(qcol(C.PRI, int(self._halo * 0.5)), 1))
-        p.drawLine(QPointF(cx - ch_r, cy), QPointF(cx - gap_h, cy))
-        p.drawLine(QPointF(cx + gap_h, cy), QPointF(cx + ch_r, cy))
-        p.drawLine(QPointF(cx, cy - ch_r), QPointF(cx, cy - gap_h))
-        p.drawLine(QPointF(cx, cy + gap_h), QPointF(cx, cy + ch_r))
+            # crosshair
+            ch_r, gap_h = fw * 0.51, fw * 0.16
+            p.setPen(QPen(qcol(C.PRI, int(self._halo * 0.5)), 1))
+            p.drawLine(QPointF(cx - ch_r, cy), QPointF(cx - gap_h, cy))
+            p.drawLine(QPointF(cx + gap_h, cy), QPointF(cx + ch_r, cy))
+            p.drawLine(QPointF(cx, cy - ch_r), QPointF(cx, cy - gap_h))
+            p.drawLine(QPointF(cx, cy + gap_h), QPointF(cx, cy + ch_r))
+
+            # centre readout — bold "J.A.R.V.I.S." text, no face pixmap
+            p.setPen(QPen(qcol(C.PRI, min(255, int(self._halo * 2))), 1))
+            f = QFont("Arial", 20, QFont.Weight.Black)
+            f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 110)
+            p.setFont(f)
+            p.drawText(QRectF(cx - 120, cy - 18, 240, 36),
+                       Qt.AlignmentFlag.AlignCenter, "J.A.R.V.I.S.")
+
+        else:
+            # ── lattice: the network of tracked signals ──────────────────────
+            pts = [(n["x"] * W, n["y"] * H) for n in self._nodes]
+            edge_a = max(20, min(120, int(self._halo * 0.9)))
+            p.setPen(QPen(qcol(C.PRI_DIM, edge_a), 1))
+            for i, j in self._edges:
+                p.drawLine(QPointF(*pts[i]), QPointF(*pts[j]))
+
+            for (nx, ny), node in zip(pts, self._nodes):
+                glow = 0.5 + 0.5 * math.sin(self._tick * node["speed"] + node["phase"])
+                a    = max(20, min(255, int((90 + 140 * glow) * (self._halo / 60.0))))
+                r_n  = 2.0 + 1.4 * glow
+                col  = qcol(C.MUTED_C if self.muted else C.PRI, a)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QBrush(col))
+                p.drawEllipse(QPointF(nx, ny), r_n, r_n)
+
+            # horizontal scanline sweep (dual-pass, like a flatbed scanner)
+            scan_y1 = (self._scan  / 360.0) * H
+            scan_y2 = (self._scan2 / 360.0) * H
+            sa = min(200, int(self._halo * 1.4))
+            p.setPen(QPen(qcol(C.MUTED_C if self.muted else C.PRI, sa), 1.4))
+            p.drawLine(QPointF(0, scan_y1), QPointF(W, scan_y1))
+            p.setPen(QPen(qcol(C.ACC, sa // 2), 1))
+            p.drawLine(QPointF(0, scan_y2), QPointF(W, scan_y2))
 
         # corner brackets — viewfinder frame
         bl = 24
@@ -570,12 +628,13 @@ class HudCanvas(QWidget):
             p.drawLine(QPointF(bx, by), QPointF(bx + dx * bl, by))
             p.drawLine(QPointF(bx, by), QPointF(bx, by + dy * bl))
 
-        # core marker — small breathing node at dead centre (no face: the
-        # Machine doesn't have one, it's just a point the signals resolve to)
-        core_r = max(3.0, fw * 0.014 * self._scale)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(qcol(C.MUTED_C if self.muted else C.WHITE, min(255, int(self._halo * 2.2)))))
-        p.drawEllipse(QPointF(cx, cy), core_r, core_r)
+        # core marker — small breathing dot at dead centre. jarvis_blue skips
+        # this, its centre is already occupied by the J.A.R.V.I.S. text.
+        if CURRENT_THEME != "jarvis_blue":
+            core_r = max(3.0, fw * 0.014 * self._scale)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(qcol(C.MUTED_C if self.muted else C.WHITE, min(255, int(self._halo * 2.2)))))
+            p.drawEllipse(QPointF(cx, cy), core_r, core_r)
 
         # particles — data bursts while speaking
         for pt in self._particles:
@@ -1753,7 +1812,10 @@ class MainWindow(QMainWindow):
     def __init__(self, face_path: str):
         super().__init__()
         self._face_path = face_path
-        self.setWindowTitle("THE MACHINE — ADMIN INTERFACE")
+        self.setWindowTitle(
+            "J.A.R.V.I.S — MARK XLVIII" if CURRENT_THEME == "jarvis_blue"
+            else "THE MACHINE — ADMIN INTERFACE"
+        )
         self.setMinimumSize(_MIN_W, _MIN_H)
         self.resize(_DEFAULT_W, _DEFAULT_H)
 
@@ -2359,16 +2421,21 @@ class MainWindow(QMainWindow):
             l.setStyleSheet(f"color: {color}; background: transparent;")
             return l
 
-        lay.addWidget(_badge("ADMIN INTERFACE", C.PRI_DIM))
+        is_jarvis = CURRENT_THEME == "jarvis_blue"
+
+        lay.addWidget(_badge("MARK XLVIII" if is_jarvis else "ADMIN INTERFACE", C.PRI_DIM))
         lay.addStretch()
 
         mid = QVBoxLayout(); mid.setSpacing(1)
-        title = QLabel("THE MACHINE")
+        title = QLabel("J.A.R.V.I.S" if is_jarvis else "THE MACHINE")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setFont(QFont("Courier New", 17, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
         mid.addWidget(title)
-        sub = QLabel("Pattern Recognition · Signal Analysis · Response")
+        sub = QLabel(
+            "Just A Rather Very Intelligent System" if is_jarvis
+            else "Pattern Recognition · Signal Analysis · Response"
+        )
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sub.setFont(QFont("Courier New", 7))
         sub.setStyleSheet(f"color: {C.PRI_DIM}; background: transparent;")
@@ -2771,11 +2838,15 @@ class MainWindow(QMainWindow):
             l.setStyleSheet(f"color: {color}; background: transparent;")
             return l
 
+        is_jarvis = CURRENT_THEME == "jarvis_blue"
         lay.addWidget(_fl("[F4] Mute  ·  [F11] Fullscreen"))
         lay.addStretch()
-        lay.addWidget(_fl("LOCAL INSTANCE  ·  ADMIN ACCESS  ·  CLASSIFIED"))
+        lay.addWidget(_fl(
+            "STARK INDUSTRIES  ·  MARK XLVIII  ·  CLASSIFIED" if is_jarvis
+            else "LOCAL INSTANCE  ·  ADMIN ACCESS  ·  CLASSIFIED"
+        ))
         lay.addStretch()
-        lay.addWidget(_fl("◈ THE MACHINE", C.PRI_DIM))
+        lay.addWidget(_fl("◈ J.A.R.V.I.S" if is_jarvis else "◈ THE MACHINE", C.PRI_DIM))
         return w
 
     def _on_file_selected(self, path: str):
@@ -3098,3 +3169,4 @@ class MachineUI:
     def stop_speaking(self):
         if not self.muted:
             self.set_state("LISTENING")
+            

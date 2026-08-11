@@ -282,7 +282,7 @@ def main():
         say("  The app still runs; those features stay off.")
         say()
     say("  Start it with:   python main.py")
-    say("  Add your Gemini API key on the first-launch screen.")
+    say("  Add your Gemini API key on the first-launch screepn.")
     say()
 
 

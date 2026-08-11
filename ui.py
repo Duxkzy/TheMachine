@@ -77,21 +77,34 @@ def load_ar_overlay():
 CONFIG_DIR = BASE_DIR / "config"
 API_FILE   = CONFIG_DIR / "api_keys.json"
 
-def load_matrix_dash():
-    """Same path-based loading as ar_overlay, so it works from any cwd."""
-    path = BASE_DIR / "matrix_dash.py"
+def load_dash_module(name: str):
+    """Path-based loading for the dashboard modules, so they work from any
+    cwd. `name` is the file stem, e.g. 'matrix_dash'."""
+    path = BASE_DIR / f"{name}.py"
     if not path.exists():
         return None
     try:
         import importlib.util
-        spec = importlib.util.spec_from_file_location("matrix_dash", path)
+        spec = importlib.util.spec_from_file_location(name, path)
         mod = importlib.util.module_from_spec(spec)
-        sys.modules["matrix_dash"] = mod
+        sys.modules[name] = mod
         spec.loader.exec_module(mod)
         return mod
     except Exception as e:
-        print(f"[Matrix] dashboard failed to load: {e}")
+        print(f"[Dash] {name} failed to load: {e}")
         return None
+
+
+def load_matrix_dash():
+    return load_dash_module("matrix_dash")
+
+
+# Themes that use the panel dashboard instead of the round HUD.
+DASH_THEMES = ("matrix", "synthwave", "cyberpunk", "minimal_white",
+               "hacker_green", "eve")
+
+# Themes that drop the left panel entirely so the centre can breathe.
+NO_LEFT_PANEL_THEMES = ("minimal_white",)
 
 
 _DEFAULT_W, _DEFAULT_H = 980, 700
@@ -144,14 +157,23 @@ _THEMES: dict[str, dict[str, str]] = {
         "TEXT": "#8ffcff", "TEXT_DIM": "#3a8a9a", "TEXT_MED": "#5ab8cc",
         "WHITE": "#d8f8ff", "DARK": "#000d14", "BAR_BG": "#011520",
     },
+    "eve": {
+        "BG": "#16100e", "PANEL": "#201612", "PANEL2": "#281c17",
+        "BORDER": "#3a2620", "BORDER_B": "#8a5f52", "BORDER_A": "#5a3a30",
+        "PRI": "#e8503f", "PRI_DIM": "#8a5f52", "PRI_GHO": "#2a1a15",
+        "ACC": "#ffb84d", "ACC2": "#ffd08a", "GREEN": "#7ac9a0", "GREEN_D": "#4a8f70",
+        "RED": "#ff6b5a", "MUTED_C": "#ff6b5a",
+        "TEXT": "#f2e4d2", "TEXT_DIM": "#8a6a5c", "TEXT_MED": "#c0a08c",
+        "WHITE": "#fff6ea", "DARK": "#100b09", "BAR_BG": "#2e1f19",
+    },
     "cyberpunk": {
-        "BG": "#0a0014", "PANEL": "#150524", "PANEL2": "#1a0630",
-        "BORDER": "#3d1a5c", "BORDER_B": "#8a2be2", "BORDER_A": "#5c2a8c",
-        "PRI": "#ff2fd4", "PRI_DIM": "#a01e8a", "PRI_GHO": "#2a0a3a",
-        "ACC": "#00f0ff", "ACC2": "#f9f002", "GREEN": "#39ff14", "GREEN_D": "#1fa60c",
-        "RED": "#ff2050", "MUTED_C": "#ff2050",
-        "TEXT": "#e0b0ff", "TEXT_DIM": "#7a4a9c", "TEXT_MED": "#b070d8",
-        "WHITE": "#fce8ff", "DARK": "#0d0018", "BAR_BG": "#1a0625",
+        "BG": "#0a0a02", "PANEL": "#12120a", "PANEL2": "#181405",
+        "BORDER": "#4a4208", "BORDER_B": "#fcee0a", "BORDER_A": "#8a7d05",
+        "PRI": "#fcee0a", "PRI_DIM": "#8a7d05", "PRI_GHO": "#1f1c02",
+        "ACC": "#25e1ed", "ACC2": "#ed1e79", "GREEN": "#25e1ed", "GREEN_D": "#1a9ca6",
+        "RED": "#ff4a57", "MUTED_C": "#ff4a57",
+        "TEXT": "#e8dc6a", "TEXT_DIM": "#7a7020", "TEXT_MED": "#b8a830",
+        "WHITE": "#fdf5c0", "DARK": "#080800", "BAR_BG": "#2a2605",
     },
     "matrix": {
         "BG": "#010703", "PANEL": "#02120a", "PANEL2": "#031a0e",
@@ -163,13 +185,13 @@ _THEMES: dict[str, dict[str, str]] = {
         "WHITE": "#d9ffe6", "DARK": "#010a05", "BAR_BG": "#062a14",
     },
     "synthwave": {
-        "BG": "#1a0b2e", "PANEL": "#241238", "PANEL2": "#2b1642",
-        "BORDER": "#5a2d7a", "BORDER_B": "#ff6ec7", "BORDER_A": "#7a3d9c",
-        "PRI": "#ff6ec7", "PRI_DIM": "#b0489c", "PRI_GHO": "#3a1a4a",
-        "ACC": "#00d9ff", "ACC2": "#ffd23f", "GREEN": "#05ffa1", "GREEN_D": "#03b876",
+        "BG": "#0d0221", "PANEL": "#190a33", "PANEL2": "#200e40",
+        "BORDER": "#4a1f7a", "BORDER_B": "#ff5cd6", "BORDER_A": "#6a2f9c",
+        "PRI": "#ff5cd6", "PRI_DIM": "#a63f96", "PRI_GHO": "#2a0f4a",
+        "ACC": "#8be9ff", "ACC2": "#ffe66d", "GREEN": "#5cffc4", "GREEN_D": "#2fb894",
         "RED": "#ff3864", "MUTED_C": "#ff3864",
-        "TEXT": "#e8b3ff", "TEXT_DIM": "#8a5a9c", "TEXT_MED": "#c088d8",
-        "WHITE": "#fff0fc", "DARK": "#150826", "BAR_BG": "#20102f",
+        "TEXT": "#f0b3ff", "TEXT_DIM": "#8a5aac", "TEXT_MED": "#c47ee0",
+        "WHITE": "#fff2ff", "DARK": "#0a0119", "BAR_BG": "#25104a",
     },
     "amoled": {
         "BG": "#000000", "PANEL": "#050505", "PANEL2": "#0a0a0a",
@@ -181,22 +203,22 @@ _THEMES: dict[str, dict[str, str]] = {
         "WHITE": "#ffffff", "DARK": "#000000", "BAR_BG": "#0a0a0a",
     },
     "hacker_green": {
-        "BG": "#000c00", "PANEL": "#001800", "PANEL2": "#001f00",
-        "BORDER": "#0d4d0d", "BORDER_B": "#27b027", "BORDER_A": "#1a661a",
-        "PRI": "#27f027", "PRI_DIM": "#158815", "PRI_GHO": "#031f03",
-        "ACC": "#f0d000", "ACC2": "#f5e050", "GREEN": "#27f027", "GREEN_D": "#15a815",
-        "RED": "#f04040", "MUTED_C": "#f04040",
-        "TEXT": "#40d840", "TEXT_DIM": "#1a661a", "TEXT_MED": "#2ea82e",
-        "WHITE": "#d0ffd0", "DARK": "#001200", "BAR_BG": "#001a00",
+        "BG": "#020703", "PANEL": "#04120a", "PANEL2": "#061a0d",
+        "BORDER": "#0d4a1e", "BORDER_B": "#1a8c38", "BORDER_A": "#116030",
+        "PRI": "#33ff66", "PRI_DIM": "#1a8c38", "PRI_GHO": "#04210f",
+        "ACC": "#ffb000", "ACC2": "#ffd45c", "GREEN": "#33ff66", "GREEN_D": "#1a8c38",
+        "RED": "#ff4040", "MUTED_C": "#ff4040",
+        "TEXT": "#5cffa0", "TEXT_DIM": "#1a6633", "TEXT_MED": "#2eb85c",
+        "WHITE": "#c8ffd8", "DARK": "#010502", "BAR_BG": "#062a14",
     },
-    "minimal_white": {   # light theme — "WHITE" here means "highest-contrast
-        "BG": "#f5f5f5", "PANEL": "#ffffff", "PANEL2": "#eeeeee",   # foreground",
-        "BORDER": "#d0d0d0", "BORDER_B": "#909090", "BORDER_A": "#c0c0c0",  # which is black on a light bg, not literally white
-        "PRI": "#202020", "PRI_DIM": "#808080", "PRI_GHO": "#e8e8e8",
-        "ACC": "#c07000", "ACC2": "#a08000", "GREEN": "#1a9850", "GREEN_D": "#0f7038",
-        "RED": "#c0304a", "MUTED_C": "#c0304a",
-        "TEXT": "#303030", "TEXT_DIM": "#a0a0a0", "TEXT_MED": "#606060",
-        "WHITE": "#000000", "DARK": "#e0e0e0", "BAR_BG": "#e8e8e8",
+    "minimal_white": {   # light theme — "WHITE" means highest-contrast
+        "BG": "#f4f3ef", "PANEL": "#faf9f6", "PANEL2": "#eeece6",  # foreground,
+        "BORDER": "#d8d6d0", "BORDER_B": "#b0ada5", "BORDER_A": "#c9c7c1",  # i.e. black on paper
+        "PRI": "#16181a", "PRI_DIM": "#6b7075", "PRI_GHO": "#e8e6e0",
+        "ACC": "#d6482f", "ACC2": "#a8703a", "GREEN": "#2e7d54", "GREEN_D": "#1f5c3c",
+        "RED": "#c0392b", "MUTED_C": "#c0392b",
+        "TEXT": "#2a2d30", "TEXT_DIM": "#9b9891", "TEXT_MED": "#6b7075",
+        "WHITE": "#000000", "DARK": "#eeece6", "BAR_BG": "#e2e0da",
     },
 }
 
@@ -1626,6 +1648,7 @@ class ThemePicker(QWidget):
         "amoled":        "◈ AMOLED",
         "hacker_green":  "◈ Hacker Green",
         "minimal_white": "◈ Minimal White",
+        "eve":           "◈ E.V.",
     }
 
     def __init__(self, parent=None):
@@ -1675,6 +1698,383 @@ class ThemePicker(QWidget):
         save_theme_choice(key)
         self._hint.setText(f'Saved "{key}" — restart the app to see it.')
         self.theme_picked.emit(key)
+
+
+class AiPickerOverlay(QWidget):
+    """
+    Pick which AI runs the assistant.
+
+    Shows what each model can actually do rather than hiding it: voice mode
+    needs a realtime-audio protocol, and only Gemini Live models speak it
+    today. Picking a text-only model is allowed — you just type instead of
+    talk, and the overlay says so before you commit.
+    """
+
+    picked = pyqtSignal(str, str)      # provider, model
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            AiPickerOverlay {{
+                background: rgba(8, 9, 10, 248);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 8px;
+            }}
+        """)
+        self._pv = load_dash_module("providers")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 14, 18, 14)
+        root.setSpacing(6)
+
+        title = QLabel("◈  CHOOSE AI MODEL")
+        title.setFont(QFont("Courier New", 12, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        root.addWidget(title)
+
+        self._current = QLabel("")
+        self._current.setFont(QFont("Courier New", 8))
+        self._current.setStyleSheet(f"color: {C.ACC2}; background: transparent;")
+        self._current.setWordWrap(True)
+        root.addWidget(self._current)
+
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {C.BORDER}; margin: 4px 0;")
+        root.addWidget(sep)
+
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; border: none; }}
+            QScrollBar:vertical {{ background: {C.BG}; width: 6px; border: none; }}
+            QScrollBar::handle:vertical {{
+                background: {C.BORDER_B}; border-radius: 3px; min-height: 18px;
+            }}
+        """)
+        holder = QWidget()
+        holder.setStyleSheet("background: transparent;")
+        self._list = QVBoxLayout(holder)
+        self._list.setContentsMargins(0, 0, 8, 0)
+        self._list.setSpacing(4)
+
+        if self._pv is None:
+            miss = QLabel("providers.py not found next to ui.py.")
+            miss.setFont(QFont("Courier New", 9))
+            miss.setStyleSheet(f"color: {C.RED}; background: transparent;")
+            self._list.addWidget(miss)
+        else:
+            self._build_rows()
+        self._list.addStretch()
+
+        area.setWidget(holder)
+        root.addWidget(area, stretch=1)
+
+        note = QLabel(
+            "Voice mode needs a realtime-audio model (marked VOICE). "
+            "Text-only models still work — you type instead of talking. "
+            "Changes apply after a restart."
+        )
+        note.setFont(QFont("Courier New", 7))
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        root.addWidget(note)
+
+        close = QPushButton("CLOSE")
+        close.setFixedHeight(28)
+        close.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_MED};
+                border: 1px solid {C.BORDER}; border-radius: 3px;
+            }}
+            QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
+        """)
+        close.clicked.connect(self.hide)
+        root.addWidget(close)
+
+        self.refresh()
+        self.hide()
+
+    def _build_rows(self) -> None:
+        pv = self._pv
+        for pid, prov in pv.PROVIDERS.items():
+            has_key = bool(pv.get_api_key(pid))
+            head = QLabel(f"{prov['label']}" + ("" if has_key else "   (no key set)"))
+            head.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+            head.setStyleSheet(
+                f"color: {C.PRI if has_key else C.TEXT_DIM}; "
+                f"background: transparent; padding-top: 6px;"
+            )
+            self._list.addWidget(head)
+
+            for m in prov["models"]:
+                self._list.addWidget(self._model_row(pid, m, has_key))
+
+    def _model_row(self, pid: str, m: dict, has_key: bool) -> QWidget:
+        pv = self._pv
+        voice = pv.VOICE in m["caps"]
+
+        btn = QPushButton()
+        btn.setFixedHeight(46)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFont(QFont("Courier New", 9))
+        tag = "VOICE" if voice else "TEXT "
+        btn.setText(f"  [{tag}]  {m['label']}\n           {m['note']}")
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {C.PANEL2}; color: {C.TEXT}; text-align: left;
+                border: 1px solid {C.BORDER}; border-radius: 3px; padding-left: 6px;
+            }}
+            QPushButton:hover {{
+                border: 1px solid {C.PRI if has_key else C.BORDER_B};
+                color: {C.PRI if has_key else C.TEXT_DIM};
+            }}
+        """)
+        btn.clicked.connect(lambda _, p=pid, mid=m["id"]: self._pick(p, mid))
+        return btn
+
+    def _pick(self, provider: str, model: str) -> None:
+        pv = self._pv
+        if not pv.get_api_key(provider):
+            field = pv.PROVIDERS[provider]["key_field"]
+            self._current.setStyleSheet(f"color: {C.RED}; background: transparent;")
+            self._current.setText(
+                f"Can't select that — no key for {pv.PROVIDERS[provider]['label']}. "
+                f"Add '{field}' in API KEYS first."
+            )
+            return
+        pv.save_selection(provider, model)
+        self.refresh()
+        self.picked.emit(provider, model)
+
+    def refresh(self) -> None:
+        if self._pv is None:
+            return
+        self._current.setStyleSheet(f"color: {C.ACC2}; background: transparent;")
+        self._current.setText("Current: " + self._pv.status_line())
+
+
+class ApiKeysOverlay(QWidget):
+    """
+    Manage every API key in one place, not just Gemini.
+
+    Everything lands in the same config/api_keys.json the rest of the app
+    already reads, so plugins keep working unchanged — spotify.py looks for
+    a "spotify" block, discord_webhook.py for "discord_webhook_url", and so
+    on. Blank fields are left out of the file rather than saved empty.
+    """
+
+    saved = pyqtSignal()
+
+    # (json key, label, placeholder, what it's for)
+    FIELDS = [
+        ("gemini_api_key",     "Gemini API key",   "AIza…",
+         "required — the assistant itself"),
+        ("openai_api_key",     "OpenAI API key",   "sk-…",
+         "optional — for plugins that use OpenAI"),
+        ("anthropic_api_key",  "Anthropic API key", "sk-ant-…",
+         "optional — for plugins that use Claude"),
+        ("openweather_api_key", "OpenWeather key",  "",
+         "optional — nicer weather data"),
+        ("discord_webhook_url", "Discord webhook",  "https://discord.com/api/webhooks/…",
+         "optional — discord_send plugin"),
+        ("spotify.client_id",     "Spotify client ID",     "",
+         "optional — spotify_control plugin"),
+        ("spotify.client_secret", "Spotify client secret", "",
+         "optional — spotify_control plugin"),
+        ("spotify.redirect_uri",  "Spotify redirect URI",
+         "http://localhost:8888/callback", "optional — must match the dashboard"),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"""
+            ApiKeysOverlay {{
+                background: rgba(8, 9, 10, 248);
+                border: 1px solid {C.BORDER_B};
+                border-radius: 8px;
+            }}
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 14, 18, 14)
+        root.setSpacing(6)
+
+        title = QLabel("◈  API KEYS")
+        title.setFont(QFont("Courier New", 12, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        root.addWidget(title)
+
+        note = QLabel("Stored in config/api_keys.json — keep that file out of git.")
+        note.setFont(QFont("Courier New", 8))
+        note.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        root.addWidget(note)
+
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {C.BORDER}; margin: 4px 0;")
+        root.addWidget(sep)
+
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; border: none; }}
+            QScrollBar:vertical {{ background: {C.BG}; width: 6px; border: none; }}
+            QScrollBar::handle:vertical {{
+                background: {C.BORDER_B}; border-radius: 3px; min-height: 18px;
+            }}
+        """)
+        holder = QWidget()
+        holder.setStyleSheet("background: transparent;")
+        form = QVBoxLayout(holder)
+        form.setContentsMargins(0, 0, 8, 0)
+        form.setSpacing(9)
+
+        existing = self._read_config()
+        self._edits: dict[str, QLineEdit] = {}
+        for key, label, placeholder, hint in self.FIELDS:
+            lbl = QLabel(label)
+            lbl.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+            lbl.setStyleSheet(f"color: {C.TEXT}; background: transparent;")
+            form.addWidget(lbl)
+
+            ed = QLineEdit()
+            ed.setFont(QFont("Courier New", 9))
+            ed.setFixedHeight(28)
+            ed.setPlaceholderText(placeholder)
+            ed.setEchoMode(QLineEdit.EchoMode.Password)
+            ed.setText(self._get_nested(existing, key))
+            ed.setStyleSheet(f"""
+                QLineEdit {{
+                    background: {C.PANEL2}; color: {C.TEXT};
+                    border: 1px solid {C.BORDER}; border-radius: 3px; padding: 3px 8px;
+                }}
+                QLineEdit:focus {{ border: 1px solid {C.PRI}; }}
+            """)
+            self._edits[key] = ed
+
+            row = QHBoxLayout(); row.setSpacing(5)
+            row.addWidget(ed, stretch=1)
+            eye = QPushButton("👁")
+            eye.setFixedSize(30, 28)
+            eye.setCursor(Qt.CursorShape.PointingHandCursor)
+            eye.setStyleSheet(f"""
+                QPushButton {{
+                    background: {C.PANEL2}; color: {C.TEXT_DIM};
+                    border: 1px solid {C.BORDER}; border-radius: 3px;
+                }}
+                QPushButton:hover {{ color: {C.PRI}; }}
+            """)
+            eye.clicked.connect(lambda _, e=ed: self._toggle_echo(e))
+            row.addWidget(eye)
+            form.addLayout(row)
+
+            h = QLabel(hint)
+            h.setFont(QFont("Courier New", 7))
+            h.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+            form.addWidget(h)
+
+        form.addStretch()
+        area.setWidget(holder)
+        root.addWidget(area, stretch=1)
+
+        self._status = QLabel("")
+        self._status.setFont(QFont("Courier New", 8))
+        self._status.setStyleSheet(f"color: {C.GREEN}; background: transparent;")
+        root.addWidget(self._status)
+
+        btns = QHBoxLayout(); btns.setSpacing(8)
+        save = QPushButton("SAVE")
+        save.setFixedHeight(30)
+        save.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        save.setCursor(Qt.CursorShape.PointingHandCursor)
+        save.setStyleSheet(f"""
+            QPushButton {{
+                background: {C.PANEL2}; color: {C.GREEN};
+                border: 1px solid {C.GREEN_D}; border-radius: 3px;
+            }}
+            QPushButton:hover {{ border: 1px solid {C.GREEN}; }}
+        """)
+        save.clicked.connect(self._save)
+        btns.addWidget(save)
+
+        close = QPushButton("CLOSE")
+        close.setFixedHeight(30)
+        close.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_MED};
+                border: 1px solid {C.BORDER}; border-radius: 3px;
+            }}
+            QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
+        """)
+        close.clicked.connect(self.hide)
+        btns.addWidget(close)
+        root.addLayout(btns)
+
+        self.hide()
+
+    @staticmethod
+    def _toggle_echo(ed: QLineEdit) -> None:
+        normal = QLineEdit.EchoMode.Normal
+        ed.setEchoMode(normal if ed.echoMode() != normal else QLineEdit.EchoMode.Password)
+
+    @staticmethod
+    def _read_config() -> dict:
+        try:
+            return json.loads(API_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _get_nested(cfg: dict, key: str) -> str:
+        """Supports 'spotify.client_id' style keys."""
+        if "." in key:
+            head, tail = key.split(".", 1)
+            return str((cfg.get(head) or {}).get(tail, "") or "")
+        return str(cfg.get(key, "") or "")
+
+    def _save(self) -> None:
+        cfg = self._read_config()
+        written = 0
+        for key, ed in self._edits.items():
+            val = ed.text().strip()
+            if "." in key:
+                head, tail = key.split(".", 1)
+                block = cfg.get(head)
+                if not isinstance(block, dict):
+                    block = {}
+                if val:
+                    block[tail] = val
+                    written += 1
+                else:
+                    block.pop(tail, None)
+                if block:
+                    cfg[head] = block
+                else:
+                    cfg.pop(head, None)
+            else:
+                if val:
+                    cfg[key] = val
+                    written += 1
+                else:
+                    cfg.pop(key, None)
+        try:
+            CONFIG_DIR.mkdir(exist_ok=True)
+            API_FILE.write_text(json.dumps(cfg, indent=4), encoding="utf-8")
+            self._status.setStyleSheet(f"color: {C.GREEN}; background: transparent;")
+            self._status.setText(
+                f"Saved {written} key(s). Gemini changes need a restart."
+            )
+            self.saved.emit()
+        except Exception as e:
+            self._status.setStyleSheet(f"color: {C.RED}; background: transparent;")
+            self._status.setText(f"Couldn't save: {e}")
 
 
 class SetupOverlay(QWidget):
@@ -2076,19 +2476,28 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        root.addWidget(self._build_header())
+        # minimal_white draws its own masthead inside the scene, so the
+        # tech-style header would just repeat the name in a clashing font
+        if CURRENT_THEME != "minimal_white":
+            root.addWidget(self._build_header())
 
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
 
-        # Matrix theme swaps the side panels for the dashboard ones. Loaded
-        # lazily; if the module is missing we silently keep the normal look.
-        self._mx = load_matrix_dash() if CURRENT_THEME == "matrix" else None
+        # Matrix and synthwave swap the side panels for the dashboard ones.
+        # Both reuse matrix_dash's panels (they take the colour class, so
+        # they re-skin themselves); only the centre scene differs.
+        self._mx = load_matrix_dash() if CURRENT_THEME in DASH_THEMES else None
 
-        self._left_panel = (
-            self._build_matrix_left() if self._mx else self._build_left_panel()
-        )
+        if CURRENT_THEME in NO_LEFT_PANEL_THEMES:
+            # no left rail — the stats live inline in the centre instead
+            self._left_panel = QWidget()
+            self._left_panel.setFixedWidth(0)
+        else:
+            self._left_panel = (
+                self._build_matrix_left() if self._mx else self._build_left_panel()
+            )
         body.addWidget(self._left_panel, stretch=0)
 
         # Center column: HUD + resizable content panel via QSplitter
@@ -2137,10 +2546,28 @@ class MainWindow(QMainWindow):
 
         self._matrix_rain = None
         if self._mx:
-            self._matrix_rain = self._mx.MatrixRain(C)
-            self._matrix_rain.submitted.connect(self._on_terminal_submit)
-            self._hud_cam_stack.addWidget(self._matrix_rain)
-            self._hud_cam_stack.setCurrentIndex(2)
+            if CURRENT_THEME == "synthwave":
+                sw = load_dash_module("synthwave_dash")
+                hero = sw.SynthwaveHero(C) if sw else None
+            elif CURRENT_THEME == "cyberpunk":
+                cp = load_dash_module("cyberpunk_dash")
+                hero = cp.CyberpunkHero(C) if cp else None
+            elif CURRENT_THEME == "minimal_white":
+                mn = load_dash_module("minimal_dash")
+                hero = mn.MinimalHero(C) if mn else None
+            elif CURRENT_THEME == "hacker_green":
+                hk = load_dash_module("hacker_dash")
+                hero = hk.HackerHero(C) if hk else None
+            elif CURRENT_THEME == "eve":
+                ev = load_dash_module("eve_dash")
+                hero = ev.EveHero(C) if ev else None
+            else:
+                hero = self._mx.MatrixRain(C)
+            if hero is not None:
+                hero.submitted.connect(self._on_terminal_submit)
+                self._matrix_rain = hero
+                self._hud_cam_stack.addWidget(hero)
+                self._hud_cam_stack.setCurrentIndex(2)
 
         self._center_split = QSplitter(Qt.Orientation.Vertical)
         self._center_split.setStyleSheet(f"""
@@ -2205,6 +2632,8 @@ class MainWindow(QMainWindow):
             ("Toggle Mute",             "[F4]",  self._toggle_mute),
             ("Interrupt",               "[Esc]", self._do_interrupt),
             ("Open Remote Control",     "",      self._open_remote),
+            ("Manage API Keys",         "",      self._toggle_api_keys),
+            ("Choose AI Model",         "",      self._toggle_ai_picker),
             ("Create Desktop Shortcut", "",      self._create_desktop_shortcut),
         ]
         if CURRENT_THEME == "jarvis_blue":
@@ -2220,6 +2649,22 @@ class MainWindow(QMainWindow):
         self._theme_picker.theme_picked.connect(
             lambda k: self._log_sig.emit(f'SYS: Theme set to "{k}" — restart to apply.')
         )
+
+        # API keys manager — all services, not just Gemini
+        self._api_keys = ApiKeysOverlay(self.centralWidget())
+        self._api_keys.saved.connect(
+            lambda: self._log_sig.emit("SYS: API keys saved to config/api_keys.json.")
+        )
+
+        # AI model picker
+        self._ai_picker = AiPickerOverlay(self.centralWidget())
+        self._ai_picker.picked.connect(
+            lambda p, m: self._log_sig.emit(
+                f"SYS: AI set to {p} / {m.split('/')[-1]} — restart to apply."
+            )
+        )
+        # saving keys can unlock providers, so refresh the picker afterwards
+        self._api_keys.saved.connect(self._ai_picker.refresh)
 
         self._overlay: SetupOverlay | None = None
         self._ready = self._check_config()
@@ -2726,6 +3171,10 @@ class MainWindow(QMainWindow):
         return w
 
     def _tick_clock(self):
+        # minimal_white has no header, so these labels don't exist there —
+        # its scene prints its own time
+        if not hasattr(self, "_clock_lbl"):
+            return
         self._clock_lbl.setText(time.strftime("%H:%M:%S"))
         self._date_lbl.setText(time.strftime("%a %d %b %Y"))
 
@@ -2909,6 +3358,8 @@ class MainWindow(QMainWindow):
         grid.addWidget(self._mute_btn)
         grid.addWidget(self._interrupt_btn)
         grid.addLayout(row)
+        grid.addWidget(_mx_btn("AI MODEL", self._toggle_ai_picker, C.PRI))
+        grid.addWidget(_mx_btn("API KEYS", self._toggle_api_keys, C.ACC))
         grid.addWidget(_mx_btn("REMOTE CONTROL", self._open_remote))
         lay.addWidget(ctrl, stretch=0)
 
@@ -3037,6 +3488,38 @@ class MainWindow(QMainWindow):
         """)
         theme_btn.clicked.connect(self._toggle_theme_picker)
         lay.addWidget(theme_btn)
+
+        keys_btn = QPushButton("🔑  API KEYS")
+        keys_btn.setFixedHeight(26)
+        keys_btn.setFont(QFont("Courier New", 7))
+        keys_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        keys_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_DIM};
+                border: 1px solid {C.BORDER}; border-radius: 3px;
+            }}
+            QPushButton:hover {{
+                color: {C.ACC}; border: 1px solid {C.BORDER_B};
+            }}
+        """)
+        keys_btn.clicked.connect(self._toggle_api_keys)
+        lay.addWidget(keys_btn)
+
+        ai_btn = QPushButton("\U0001F9E0  AI MODEL")
+        ai_btn.setFixedHeight(26)
+        ai_btn.setFont(QFont("Courier New", 7))
+        ai_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        ai_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_DIM};
+                border: 1px solid {C.BORDER}; border-radius: 3px;
+            }}
+            QPushButton:hover {{
+                color: {C.PRI}; border: 1px solid {C.BORDER_B};
+            }}
+        """)
+        ai_btn.clicked.connect(self._toggle_ai_picker)
+        lay.addWidget(ai_btn)
 
         # AR hand-tracking — JARVIS theme only, it's a toy for that skin
         if CURRENT_THEME == "jarvis_blue":
@@ -3337,6 +3820,31 @@ class MainWindow(QMainWindow):
         self._palette.raise_()
         self._palette.focus_input()
 
+    def _toggle_ai_picker(self) -> None:
+        if self._ai_picker.isVisible():
+            self._ai_picker.hide()
+            return
+        cw = self.centralWidget()
+        w, h = min(560, int(cw.width() * 0.84)), min(580, int(cw.height() * 0.88))
+        self._ai_picker.setGeometry(
+            (cw.width() - w) // 2, (cw.height() - h) // 2, w, h
+        )
+        self._ai_picker.refresh()
+        self._ai_picker.show()
+        self._ai_picker.raise_()
+
+    def _toggle_api_keys(self) -> None:
+        if self._api_keys.isVisible():
+            self._api_keys.hide()
+            return
+        cw = self.centralWidget()
+        w, h = min(520, int(cw.width() * 0.82)), min(560, int(cw.height() * 0.86))
+        self._api_keys.setGeometry(
+            (cw.width() - w) // 2, (cw.height() - h) // 2, w, h
+        )
+        self._api_keys.show()
+        self._api_keys.raise_()
+
     def _toggle_theme_picker(self) -> None:
         if self._theme_picker.isVisible():
             self._theme_picker.hide()
@@ -3557,6 +4065,14 @@ class MainWindow(QMainWindow):
     def _apply_state(self, state: str):
         self.hud.state    = state
         self.hud.speaking = (state == "SPEAKING")
+        # dashboard themes have their own centre scene that reacts too
+        hero = getattr(self, "_matrix_rain", None)
+        if hero is not None:
+            hero.state = state
+            if hasattr(hero, "speaking"):
+                hero.speaking = (state == "SPEAKING")
+            if hasattr(hero, "muted"):
+                hero.muted = self._muted
 
     def _check_config(self) -> bool:
         if not API_FILE.exists(): return False

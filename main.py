@@ -49,6 +49,7 @@ except ImportError:
     _VOSK_OK = False
 
 from machine import Plugin as _MachinePlugin   # the class-based plugin SDK
+import app_launcher                            # fuzzy app finder/launcher
 
 from actions.file_processor import file_processor
 from actions.flight_finder     import flight_finder
@@ -98,7 +99,17 @@ _log_handler.setFormatter(logging.Formatter(
     "%(asctime)s  %(levelname)-7s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
 ))
 logger.addHandler(_log_handler)
-LIVE_MODEL          = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+import providers as _providers          # AI model registry / picker config
+
+# Which model runs the assistant. Read from config so the in-app picker
+# actually changes it; falls back to the Gemini Live default.
+try:
+    _AI_PROVIDER, LIVE_MODEL = _providers.get_selection()
+    _AI_VOICE_OK = _providers.supports_voice(_AI_PROVIDER, LIVE_MODEL)
+except Exception:
+    _AI_PROVIDER, LIVE_MODEL = "gemini", "models/gemini-2.5-flash-native-audio-preview-12-2025"
+    _AI_VOICE_OK = True
+
 CHANNELS            = 1
 SEND_SAMPLE_RATE    = 16000
 RECEIVE_SAMPLE_RATE = 24000
@@ -179,17 +190,35 @@ TOOL_DECLARATIONS = [
         "description": (
             "Opens any application on the computer. "
             "Use this whenever the user asks to open, launch, or start any app, "
-            "website, or program. Always call this tool — never just say you opened it."
+            "website, or program. Always call this tool — never just say you opened it. "
+            "Pass the name the user said, exactly as they said it — the launcher "
+            "does its own fuzzy matching against installed apps, so casing, typos, "
+            "and short names all work. Don't guess at an executable name."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "app_name": {
                     "type": "STRING",
-                    "description": "Exact name of the application (e.g. 'WhatsApp', 'Chrome', 'Spotify')"
+                    "description": "App name as the user said it (e.g. 'spotify', 'vs code', 'discord')"
                 }
             },
             "required": ["app_name"]
+        }
+    },
+    {
+        "name": "list_apps",
+        "description": (
+            "Lists applications actually installed on this computer. "
+            "Use when the user asks what's installed, or when you need to check "
+            "whether something exists before opening it."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "filter": {"type": "STRING", "description": "Optional text to filter names by"},
+            },
+            "required": []
         }
     },
     {
@@ -990,8 +1019,27 @@ class MachineLive:
 
         try:
             if name == "open_app":
-                r = await loop.run_in_executor(None, lambda: open_app(parameters=args, response=None, player=self.ui))
-                result = r or f"Opened {args.get('app_name')}."
+                # Try the fuzzy launcher first — it indexes real installed
+                # apps and tolerates casing/typos/aliases. Falls back to the
+                # original open_app if it finds nothing.
+                app_name = args.get("app_name", "")
+                r = await loop.run_in_executor(
+                    None, lambda: app_launcher.open_app_smart(app_name)
+                )
+                if r.startswith("Couldn't find"):
+                    fallback = await loop.run_in_executor(
+                        None,
+                        lambda: open_app(parameters=args, response=None, player=self.ui),
+                    )
+                    result = fallback or r
+                else:
+                    result = r
+
+            elif name == "list_apps":
+                r = await loop.run_in_executor(
+                    None, lambda: app_launcher.list_installed(args.get("filter", ""))
+                )
+                result = r
 
             elif name == "weather_report":
                 r = await loop.run_in_executor(None, lambda: weather_action(parameters=args, player=self.ui))
@@ -1610,7 +1658,19 @@ class MachineLive:
         while True:
             try:
                 print("[MACHINE] Connecting...")
-                logger.info("Connecting to Gemini Live session...")
+                logger.info(f"Connecting with {_AI_PROVIDER} / {LIVE_MODEL}")
+                if not _AI_VOICE_OK:
+                    # The picker allows text-only models; the live socket
+                    # will refuse them, so say why instead of looping on a
+                    # cryptic websocket error.
+                    self.ui.write_log(
+                        f"ERR: '{LIVE_MODEL}' is a text-only model — voice mode "
+                        "needs a VOICE model. Open AI MODEL and pick one, or "
+                        "type your messages instead."
+                    )
+                    self.ui.set_state("SLEEPING")
+                    await asyncio.sleep(30)
+                    continue
                 self.ui.set_state("THINKING")
                 config = self._build_config()
 
